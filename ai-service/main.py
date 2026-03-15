@@ -1,0 +1,648 @@
+import asyncio
+import os
+import uuid
+import time
+from datetime import datetime, timedelta
+from typing import Optional
+
+import psycopg2
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
+load_dotenv()
+
+# Set DATABASE_URL default if not in env
+if not os.environ.get("DATABASE_URL"):
+    os.environ["DATABASE_URL"] = (
+        "postgresql://postgres:postgres@72.62.162.83:5432/meta_source"
+    )
+
+from logging_config import setup_logging, get_logger
+
+setup_logging(os.environ.get("LOG_LEVEL", "INFO"))
+logger = get_logger("api")
+
+from agents import trace, set_tracing_disabled
+from agents.tracing import custom_span
+
+# Disable sending traces to OpenAI backend if no API key or explicitly disabled
+if os.environ.get("DISABLE_OPENAI_TRACING", "").lower() in ("1", "true"):
+    set_tracing_disabled(True)
+    logger.info("OpenAI tracing disabled via DISABLE_OPENAI_TRACING")
+
+from ai_agents.change_detector import detect_changes
+from ai_agents.summarizer import summarize_changes
+from ai_agents.anomaly_detector import detect_anomalies
+from ai_agents.query_agent import process_query
+from scrapers.rate_scraper import scrape_market_rates
+from email_notifier import send_manager_notification
+from anomaly_dedup import compute_fingerprint, is_duplicate, record_fingerprint, ensure_table
+
+app = FastAPI(title="MetaSource AI Service", version="1.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# In-memory session store for chat continuity
+sessions: dict[str, list] = {}
+
+
+# ── Request logging middleware ────────────────────────────────────────────
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start = time.time()
+    logger.info(
+        "request_started",
+        extra={"extra_data": {"method": request.method, "path": request.url.path}},
+    )
+    response = await call_next(request)
+    duration_ms = round((time.time() - start) * 1000, 2)
+    logger.info(
+        "request_completed",
+        extra={
+            "extra_data": {
+                "method": request.method,
+                "path": request.url.path,
+                "status": response.status_code,
+                "duration_ms": duration_ms,
+            }
+        },
+    )
+    return response
+
+
+# ── Request / Response models ──────────────────────────────────────────────
+
+
+class ChatRequest(BaseModel):
+    message: str
+    managerId: Optional[str] = None
+    sessionId: Optional[str] = None
+
+
+class ChatResponse(BaseModel):
+    response: str
+    sessionId: str
+
+
+class ChangeItem(BaseModel):
+    changeType: str
+    fieldChanged: str
+    oldValue: Optional[str] = None
+    newValue: Optional[str] = None
+    requisitionId: Optional[str] = None
+
+
+class SummarizeRequest(BaseModel):
+    changes: list[ChangeItem]
+    category: str
+
+
+class SummarizeResponse(BaseModel):
+    summary: str
+
+
+class AnalyzeRequest(BaseModel):
+    managerId: Optional[str] = None
+    category: Optional[str] = None
+
+
+class AnomalyItem(BaseModel):
+    type: str
+    description: str
+    severity: str
+    requisitionId: Optional[str] = None
+
+
+class AnalyzeResponse(BaseModel):
+    anomalies: list[AnomalyItem]
+
+
+class DetectChangesRequest(BaseModel):
+    since: Optional[datetime] = None
+
+
+class DetectChangesResponse(BaseModel):
+    changes_by_category: dict
+
+
+class ScrapeResponse(BaseModel):
+    status: str
+    roles_scraped: int
+    duration_ms: int
+
+
+# ── Routes ─────────────────────────────────────────────────────────────────
+
+
+@app.post("/api/ai/chat", response_model=ChatResponse)
+async def chat(request: ChatRequest):
+    """Natural language query agent - answers questions about workforce data."""
+    session_id = request.sessionId or str(uuid.uuid4())
+    logger.info(
+        "chat_request",
+        extra={
+            "extra_data": {
+                "session_id": session_id,
+                "manager_id": request.managerId,
+                "message_length": len(request.message),
+            }
+        },
+    )
+    try:
+        with trace("Chat Query", group_id=session_id):
+            with custom_span("chat_endpoint"):
+                response_text = await process_query(
+                    request.message, request.managerId
+                )
+        logger.info(
+            "chat_response",
+            extra={
+                "extra_data": {
+                    "session_id": session_id,
+                    "response_length": len(response_text),
+                }
+            },
+        )
+        return ChatResponse(response=response_text, sessionId=session_id)
+    except Exception as e:
+        logger.error(
+            "chat_failed",
+            extra={"extra_data": {"session_id": session_id, "error": str(e)}},
+            exc_info=True,
+        )
+        raise HTTPException(status_code=500, detail=f"Chat processing failed: {str(e)}")
+
+
+@app.post("/api/ai/summarize", response_model=SummarizeResponse)
+async def summarize(request: SummarizeRequest):
+    """Summarize requisition changes using AI."""
+    logger.info(
+        "summarize_request",
+        extra={
+            "extra_data": {
+                "category": request.category,
+                "change_count": len(request.changes),
+            }
+        },
+    )
+    try:
+        with trace("Summarize Changes"):
+            with custom_span("summarize_endpoint"):
+                changes_dicts = [c.model_dump() for c in request.changes]
+                summary = await summarize_changes(changes_dicts, request.category)
+        logger.info(
+            "summarize_response",
+            extra={
+                "extra_data": {
+                    "category": request.category,
+                    "summary_length": len(summary),
+                }
+            },
+        )
+        return SummarizeResponse(summary=summary)
+    except Exception as e:
+        logger.error(
+            "summarize_failed",
+            extra={"extra_data": {"category": request.category, "error": str(e)}},
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=500, detail=f"Summarization failed: {str(e)}"
+        )
+
+
+@app.post("/api/ai/analyze", response_model=AnalyzeResponse)
+async def analyze(request: AnalyzeRequest):
+    """Detect anomalies in requisition data using AI."""
+    logger.info(
+        "analyze_request",
+        extra={
+            "extra_data": {
+                "category": request.category,
+                "manager_id": request.managerId,
+            }
+        },
+    )
+    try:
+        with trace("Anomaly Analysis"):
+            with custom_span("analyze_endpoint"):
+                anomalies_raw = await detect_anomalies(
+                    category=request.category, manager_id=request.managerId
+                )
+                anomalies = []
+                for a in anomalies_raw:
+                    anomalies.append(
+                        AnomalyItem(
+                            type=a.get("type", "unknown"),
+                            description=a.get("description", ""),
+                            severity=a.get("severity", "medium"),
+                            requisitionId=a.get("requisitionId"),
+                        )
+                    )
+        logger.info(
+            "analyze_response",
+            extra={
+                "extra_data": {
+                    "category": request.category,
+                    "anomaly_count": len(anomalies),
+                }
+            },
+        )
+        return AnalyzeResponse(anomalies=anomalies)
+    except Exception as e:
+        logger.error(
+            "analyze_failed",
+            extra={"extra_data": {"category": request.category, "error": str(e)}},
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=500, detail=f"Analysis failed: {str(e)}"
+        )
+
+
+@app.post("/api/ai/detect-changes", response_model=DetectChangesResponse)
+async def detect_changes_endpoint(request: DetectChangesRequest):
+    """Detect unsummarized changes (pure Python, no AI)."""
+    logger.info(
+        "detect_changes_request",
+        extra={"extra_data": {"since": str(request.since)}},
+    )
+    try:
+        with trace("Detect Changes"):
+            with custom_span("detect_changes_endpoint"):
+                grouped = detect_changes(since=request.since)
+        total = sum(len(v) for v in grouped.values())
+        logger.info(
+            "detect_changes_response",
+            extra={
+                "extra_data": {
+                    "categories_found": len(grouped),
+                    "total_changes": total,
+                }
+            },
+        )
+        return DetectChangesResponse(changes_by_category=grouped)
+    except Exception as e:
+        logger.error("detect_changes_failed", extra={"extra_data": {"error": str(e)}}, exc_info=True)
+        raise HTTPException(
+            status_code=500, detail=f"Change detection failed: {str(e)}"
+        )
+
+
+@app.post("/api/ai/scrape", response_model=ScrapeResponse)
+async def scrape(request: dict = None):
+    """Scrape/generate market rates."""
+    logger.info("scrape_request")
+    try:
+        with trace("Market Rate Scrape"):
+            with custom_span("scrape_endpoint"):
+                result = await scrape_market_rates()
+        logger.info(
+            "scrape_response",
+            extra={"extra_data": {"roles_scraped": result["roles_scraped"], "duration_ms": result["duration_ms"]}},
+        )
+        return ScrapeResponse(**result)
+    except Exception as e:
+        logger.error("scrape_failed", extra={"extra_data": {"error": str(e)}}, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Scraping failed: {str(e)}")
+
+
+@app.get("/api/ai/health")
+async def health():
+    logger.debug("health_check")
+    return {"status": "ok"}
+
+
+# ── Anomaly email notification with dedup ────────────────────────────────
+
+
+class NotifyAnomalyRequest(BaseModel):
+    anomalies: list[AnomalyItem]
+    category: str
+    managerId: Optional[str] = None
+
+
+@app.post("/api/ai/notify-anomaly")
+async def notify_anomaly(request: NotifyAnomalyRequest):
+    """Send email for critical/high anomalies with dedup.
+
+    Returns which anomalies are NEW (not seen in the last 24h) so the
+    caller can decide whether to create in-app notifications for them.
+    """
+    logger.info(
+        "notify_anomaly_request",
+        extra={
+            "extra_data": {
+                "category": request.category,
+                "anomaly_count": len(request.anomalies),
+                "manager_id": request.managerId,
+            }
+        },
+    )
+    sent = 0
+    skipped = 0
+    new_anomalies: list[dict] = []
+
+    # Resolve manager if not provided
+    manager_id = request.managerId
+    if not manager_id:
+        conn = psycopg2.connect(os.environ["DATABASE_URL"])
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                'SELECT id FROM "SourcingManager" WHERE category = %s',
+                (request.category,),
+            )
+            row = cur.fetchone()
+            if row:
+                manager_id = row[0]
+        finally:
+            conn.close()
+
+    for anomaly in request.anomalies:
+        if anomaly.severity not in ("critical", "high"):
+            continue
+
+        fp = compute_fingerprint(anomaly.type, anomaly.requisitionId, request.category)
+
+        if is_duplicate(fp, hours=24):
+            logger.info(
+                "anomaly_email_skipped_dup",
+                extra={
+                    "extra_data": {
+                        "fingerprint": fp[:16],
+                        "type": anomaly.type,
+                        "category": request.category,
+                    }
+                },
+            )
+            skipped += 1
+            continue
+
+        # Record fingerprint before sending to prevent race conditions
+        record_fingerprint(fp, request.category, anomaly.severity, manager_id)
+
+        # Track this as a genuinely new anomaly
+        new_anomalies.append({
+            "type": anomaly.type,
+            "description": anomaly.description,
+            "severity": anomaly.severity,
+            "requisitionId": anomaly.requisitionId,
+        })
+
+        if manager_id:
+            msg = f"[{anomaly.severity.upper()}] {anomaly.description}"
+            send_manager_notification(
+                manager_id,
+                f"Anomaly Alert: {request.category.replace('_', ' ').title()}",
+                msg,
+                "ANOMALY_ALERT",
+            )
+            sent += 1
+
+    logger.info(
+        "notify_anomaly_complete",
+        extra={
+            "extra_data": {
+                "category": request.category,
+                "sent": sent,
+                "skipped": skipped,
+                "new_count": len(new_anomalies),
+            }
+        },
+    )
+    return {"sent": sent, "skipped": skipped, "newAnomalies": new_anomalies}
+
+
+# ── Background Schedulers ────────────────────────────────────────────────
+
+scheduler_logger = get_logger("scheduler")
+
+
+async def scheduled_summarize():
+    """Find unsummarized changes, summarize by category, update records, create notifications."""
+    while True:
+        await asyncio.sleep(900)  # 15 minutes
+        scheduler_logger.info("scheduled_summarize_started")
+        try:
+            with trace("Scheduled Summarize"):
+                grouped = detect_changes()
+                if not grouped:
+                    scheduler_logger.info("scheduled_summarize_no_changes")
+                    continue
+
+                for category, changes in grouped.items():
+                    if not changes:
+                        continue
+
+                    scheduler_logger.info(
+                        "summarizing_category",
+                        extra={
+                            "extra_data": {
+                                "category": category,
+                                "change_count": len(changes),
+                            }
+                        },
+                    )
+
+                    with custom_span(f"summarize_{category}"):
+                        summary = await summarize_changes(changes, category)
+
+                    with custom_span(f"db_update_{category}"):
+                        conn = psycopg2.connect(os.environ["DATABASE_URL"])
+                        cur = conn.cursor()
+                        try:
+                            change_ids = [c["id"] for c in changes]
+                            for cid in change_ids:
+                                cur.execute(
+                                    'UPDATE "RequisitionChange" SET summary = %s WHERE id = %s',
+                                    (summary, cid),
+                                )
+                            cur.execute(
+                                'SELECT id FROM "SourcingManager" WHERE category = %s',
+                                (category,),
+                            )
+                            row = cur.fetchone()
+                            if row:
+                                manager_id = row[0]
+                                cur.execute(
+                                    '''INSERT INTO "Notification" (id, "managerId", type, title, message, "isRead", "createdAt")
+                                       VALUES (gen_random_uuid(), %s, 'CHANGE_SUMMARY', 'Automated Change Summary', %s, false, NOW())''',
+                                    (manager_id, summary),
+                                )
+                            conn.commit()
+                            scheduler_logger.info(
+                                "db_updated",
+                                extra={
+                                    "extra_data": {
+                                        "category": category,
+                                        "changes_updated": len(change_ids),
+                                        "notification_created": bool(row),
+                                    }
+                                },
+                            )
+                        finally:
+                            conn.close()
+
+                    if row:
+                        with custom_span(f"email_{category}"):
+                            send_manager_notification(
+                                manager_id,
+                                f"{len(changes)} Changes in {category.replace('_', ' ').title()}",
+                                summary,
+                                "CHANGE_SUMMARY",
+                            )
+
+                    scheduler_logger.info(
+                        "category_summarized",
+                        extra={
+                            "extra_data": {
+                                "category": category,
+                                "change_count": len(changes),
+                            }
+                        },
+                    )
+        except Exception as e:
+            scheduler_logger.error(
+                "scheduled_summarize_failed",
+                extra={"extra_data": {"error": str(e)}},
+                exc_info=True,
+            )
+
+
+async def scheduled_anomaly_scan():
+    """Run anomaly detection daily at 10 AM UTC."""
+    while True:
+        # Calculate seconds until next 10 AM UTC
+        now = datetime.utcnow()
+        target = now.replace(hour=10, minute=0, second=0, microsecond=0)
+        if now >= target:
+            target += timedelta(days=1)
+        wait_seconds = (target - now).total_seconds()
+        scheduler_logger.info(
+            "anomaly_scan_scheduled",
+            extra={"extra_data": {"next_run": str(target), "wait_seconds": wait_seconds}},
+        )
+        await asyncio.sleep(wait_seconds)
+
+        scheduler_logger.info("scheduled_anomaly_scan_started")
+        try:
+            categories = [
+                "ENGINEERING_CONTRACTORS",
+                "CONTENT_TRUST_SAFETY",
+                "DATA_OPERATIONS",
+                "MARKETING_CREATIVE",
+                "CORPORATE_SERVICES",
+            ]
+            with trace("Scheduled Anomaly Scan"):
+                for category in categories:
+                    scheduler_logger.info(
+                        "scanning_category",
+                        extra={"extra_data": {"category": category}},
+                    )
+
+                    with custom_span(f"anomaly_detect_{category}"):
+                        anomalies = await detect_anomalies(category=category)
+
+                    if not anomalies:
+                        scheduler_logger.info(
+                            "no_anomalies",
+                            extra={"extra_data": {"category": category}},
+                        )
+                        continue
+
+                    scheduler_logger.warning(
+                        "anomalies_detected",
+                        extra={
+                            "extra_data": {
+                                "category": category,
+                                "anomaly_count": len(anomalies),
+                            }
+                        },
+                    )
+
+                    with custom_span(f"anomaly_notify_{category}"):
+                        conn = psycopg2.connect(os.environ["DATABASE_URL"])
+                        cur = conn.cursor()
+                        try:
+                            cur.execute(
+                                'SELECT id FROM "SourcingManager" WHERE category = %s',
+                                (category,),
+                            )
+                            row = cur.fetchone()
+                            if row:
+                                manager_id = row[0]
+                                all_msgs = []
+                                for anomaly in anomalies[:5]:
+                                    a_type = anomaly.get("type", "unknown")
+                                    a_severity = anomaly.get("severity", "medium")
+                                    a_req_id = anomaly.get("requisitionId")
+                                    fp = compute_fingerprint(a_type, a_req_id, category)
+
+                                    if is_duplicate(fp, hours=24):
+                                        scheduler_logger.info(
+                                            "scheduled_anomaly_skipped_dup",
+                                            extra={
+                                                "extra_data": {
+                                                    "fingerprint": fp[:16],
+                                                    "type": a_type,
+                                                    "category": category,
+                                                }
+                                            },
+                                        )
+                                        continue
+
+                                    msg = f"[{a_severity.upper()}] {anomaly.get('description', 'Anomaly detected')}"
+                                    cur.execute(
+                                        '''INSERT INTO "Notification" (id, "managerId", type, title, message, "isRead", "createdAt")
+                                           VALUES (gen_random_uuid(), %s, 'ANOMALY_ALERT', 'Automated Anomaly Alert', %s, false, NOW())''',
+                                        (manager_id, msg),
+                                    )
+                                    all_msgs.append(msg)
+                                    record_fingerprint(fp, category, a_severity, manager_id)
+                            conn.commit()
+                        finally:
+                            conn.close()
+
+                        if row and all_msgs:
+                            send_manager_notification(
+                                manager_id,
+                                f"Anomaly Alert: {category.replace('_', ' ').title()}",
+                                "\n".join(all_msgs),
+                                "ANOMALY_ALERT",
+                            )
+                            scheduler_logger.info(
+                                "anomaly_notifications_sent",
+                                extra={
+                                    "extra_data": {
+                                        "category": category,
+                                        "manager_id": manager_id,
+                                        "notification_count": len(all_msgs),
+                                    }
+                                },
+                            )
+        except Exception as e:
+            scheduler_logger.error(
+                "scheduled_anomaly_scan_failed",
+                extra={"extra_data": {"error": str(e)}},
+                exc_info=True,
+            )
+
+
+@app.on_event("startup")
+async def start_schedulers():
+    logger.info("starting_background_schedulers")
+    ensure_table()
+    asyncio.create_task(scheduled_summarize())
+    asyncio.create_task(scheduled_anomaly_scan())
+    logger.info("background_schedulers_started")

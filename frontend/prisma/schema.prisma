@@ -1,0 +1,164 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum RequisitionCategory {
+  ENGINEERING_CONTRACTORS
+  CONTENT_TRUST_SAFETY
+  DATA_OPERATIONS
+  MARKETING_CREATIVE
+  CORPORATE_SERVICES
+}
+
+enum RequisitionStatus {
+  OPEN
+  SOURCING
+  INTERVIEWING
+  OFFER
+  ONBOARDING
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+enum Priority {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum ChangeType {
+  CREATED
+  UPDATED
+  STATUS_CHANGE
+  RATE_CHANGE
+  HEADCOUNT_CHANGE
+  BUDGET_CHANGE
+  BULK_IMPORT
+}
+
+enum NotificationType {
+  CHANGE_SUMMARY
+  ANOMALY_ALERT
+  BUDGET_WARNING
+  MILESTONE
+}
+
+model SourcingManager {
+  id            String              @id @default(uuid())
+  name          String
+  email         String              @unique
+  category      RequisitionCategory
+  avatarUrl     String?
+  createdAt     DateTime            @default(now())
+
+  notifications Notification[]
+  rules         NotificationRule[]
+}
+
+model Requisition {
+  id              String              @id @default(uuid())
+  requisitionId   String              @unique
+  team            String
+  department      String
+  roleTitle       String
+  category        RequisitionCategory
+  headcountNeeded Int
+  headcountFilled Int                 @default(0)
+  vendor          String
+  billRateHourly  Float
+  location        String
+  status          RequisitionStatus   @default(OPEN)
+  priority        Priority            @default(MEDIUM)
+  budgetAllocated Float
+  budgetSpent     Float               @default(0)
+  startDate       DateTime?
+  endDate         DateTime?
+  notes           String?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  changes         RequisitionChange[]
+}
+
+model RequisitionChange {
+  id            String      @id @default(uuid())
+  requisitionId String
+  requisition   Requisition @relation(fields: [requisitionId], references: [id], onDelete: Cascade)
+  changeType    ChangeType
+  fieldChanged  String?
+  oldValue      String?
+  newValue      String?
+  changedBy     String      @default("system")
+  summary       String?
+  createdAt     DateTime    @default(now())
+}
+
+model Notification {
+  id        String           @id @default(uuid())
+  managerId String
+  manager   SourcingManager  @relation(fields: [managerId], references: [id], onDelete: Cascade)
+  type      NotificationType
+  title     String
+  message   String
+  isRead    Boolean          @default(false)
+  metadata  Json?
+  createdAt DateTime         @default(now())
+}
+
+model NotificationRule {
+  id        String          @id @default(uuid())
+  managerId String
+  manager   SourcingManager @relation(fields: [managerId], references: [id], onDelete: Cascade)
+  ruleType  String
+  threshold Float?
+  isEnabled Boolean         @default(true)
+  createdAt DateTime        @default(now())
+}
+
+model MarketRate {
+  id         String              @id @default(uuid())
+  roleTitle  String
+  category   RequisitionCategory
+  location   String
+  minRate    Float
+  maxRate    Float
+  medianRate Float
+  source     String
+  scrapedAt  DateTime            @default(now())
+}
+
+model ScrapeLog {
+  id           String   @id @default(uuid())
+  source       String
+  rolesScraped Int
+  status       String
+  duration     Int
+  error        String?
+  createdAt    DateTime @default(now())
+}
+
+model ChatSession {
+  id        String   @id @default(uuid())
+  managerId String?
+  messages  Json     @default("[]")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model AnomalyFingerprint {
+  id          String   @id @default(uuid())
+  fingerprint String
+  category    String
+  severity    String
+  managerId   String?
+  createdAt   DateTime @default(now())
+
+  @@index([fingerprint, createdAt], name: "idx_anomaly_fp_lookup")
+}

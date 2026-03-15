@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+
+# Build outputs
+frontend/.next/
+frontend/tsconfig.tsbuildinfo
+gateway/server
+ai-service/__pycache__/
+ai-service/**/__pycache__/
+
+# Credentials & secrets (NEVER commit)
+k8s/secrets.yaml
+*.secret*.json
+clientmeta_secret_*
+.env
+.env.*
+
+# Large binary files
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.ico
+image.png
+Screenshot*.png
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Lock files (optional — keep package-lock if desired)
+frontend/package-lock.json
+
+# Claude config
+.claude/

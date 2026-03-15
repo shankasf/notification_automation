@@ -1,0 +1,62 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --primary: #0668E1;
+  --primary-hover: #0553B4;
+  --primary-light: #EBF2FE;
+  --background: #FFFFFF;
+  --foreground: #1C2028;
+  --muted: #F5F6F7;
+  --muted-foreground: #606770;
+  --border: #EBEDF0;
+  --card: #FFFFFF;
+  --card-foreground: #1C2028;
+  --destructive: #DC2626;
+  --success: #16A34A;
+  --warning: #D97706;
+}
+
+@layer base {
+  * {
+    @apply border-gray-200;
+  }
+
+  body {
+    @apply bg-gray-50 text-gray-900 antialiased;
+  }
+}
+
+@layer components {
+  .sidebar-link {
+    @apply flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-gray-600 transition-all hover:bg-gray-100 hover:text-gray-900;
+  }
+
+  .sidebar-link-active {
+    @apply flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium bg-primary-50 text-primary-600 transition-all;
+  }
+
+  .stat-card {
+    @apply rounded-xl border border-gray-200 bg-white p-6 shadow-sm;
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: #d1d5db;
+    border-radius: 3px;
+  }
+}

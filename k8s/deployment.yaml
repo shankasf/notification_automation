@@ -1,0 +1,142 @@
+# Frontend (Next.js)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: meta-frontend
+  namespace: meta-test
+  labels:
+    app: meta-frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: meta-frontend
+  template:
+    metadata:
+      labels:
+        app: meta-frontend
+    spec:
+      initContainers:
+        - name: run-migrations
+          image: node:20-bookworm
+          imagePullPolicy: IfNotPresent
+          workingDir: /app
+          command: ["sh", "-c", "npm install --include=dev --ignore-scripts && npx prisma generate && npx prisma migrate deploy"]
+          env:
+            - name: DATABASE_URL
+              value: "postgresql://postgres:postgres@72.62.162.83:5432/meta_source?connection_limit=5&pool_timeout=10"
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "200m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+          volumeMounts:
+            - name: frontend-source
+              mountPath: /app
+      containers:
+        - name: frontend
+          image: node:20-bookworm
+          imagePullPolicy: IfNotPresent
+          workingDir: /app
+          command: ["sh", "-c", "npm install --include=dev --ignore-scripts && npx prisma generate && npm run build && npm run start"]
+          ports:
+            - containerPort: 3000
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: NODE_OPTIONS
+              value: "--max-old-space-size=2048"
+            - name: NEXT_TELEMETRY_DISABLED
+              value: "1"
+            - name: DATABASE_URL
+              value: "postgresql://postgres:postgres@72.62.162.83:5432/meta_source?connection_limit=20&pool_timeout=10"
+            - name: AI_SERVICE_URL
+              value: "http://meta-ai:8000"
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: openai-secret
+                  key: OPENAI_API_KEY
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: aws-secret
+                  key: AWS_ACCESS_KEY_ID
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: aws-secret
+                  key: AWS_SECRET_ACCESS_KEY
+            - name: AWS_REGION
+              value: "us-east-1"
+            - name: SNS_ADMIN_EMAIL
+              value: "sagar@callsphere.tech"
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "3Gi"
+              cpu: "2000m"
+          volumeMounts:
+            - name: frontend-source
+              mountPath: /app
+      volumes:
+        - name: frontend-source
+          hostPath:
+            path: /home/ubuntu/apps/meta_test/frontend
+            type: Directory
+---
+# AI Service (Python FastAPI)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: meta-ai
+  namespace: meta-test
+  labels:
+    app: meta-ai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: meta-ai
+  template:
+    metadata:
+      labels:
+        app: meta-ai
+    spec:
+      containers:
+        - name: ai
+          image: python:3.11-slim
+          imagePullPolicy: IfNotPresent
+          workingDir: /app
+          command: ["sh", "-c", "pip install -r requirements.txt && uvicorn main:app --host 0.0.0.0 --port 8000 --reload"]
+          ports:
+            - containerPort: 8000
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: DATABASE_URL
+              value: "postgresql://postgres:postgres@72.62.162.83:5432/meta_source"
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: openai-secret
+                  key: OPENAI_API_KEY
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "200m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+          volumeMounts:
+            - name: ai-source
+              mountPath: /app
+      volumes:
+        - name: ai-source
+          hostPath:
+            path: /home/ubuntu/apps/meta_test/ai-service
+            type: Directory

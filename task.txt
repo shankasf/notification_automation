@@ -1,0 +1,62 @@
+Below is the interview layout, please note the full interview will be 45 minutes. The manager has asked that you complete the below assessment over the weekend / early next week.
+
+ 
+
+Interview Agenda (45 minutes)
+
+2–3 minutes: Intro and overview of the role
+Case study / project walkthrough: Walk through what you did (tool + approach)
+Behavioral questions
+Few minuets at the end for your questions
+Problem Statement: We have a dynamic dataset around what we need to order and how much that is frequently changed and causing problems for a group of five sourcing managers. Currently, these managers are either notified manually via chat or must proactively check the dataset themselves to find the information they need.
+
+ 
+
+Assignment: Design a scalable, automated solution that ensures each sourcing manager receives timely and relevant updates from the dataset, minimizing manual intervention and maximizing efficiency. Your solution should address:
+
+How will you automate the notification and information delivery process?
+How will your approach handle growth (e.g., more managers, larger datasets)?
+How will you ensure each manager receives only the information relevant to them but also captures all changes?
+How will you ensure the solution is easy to maintain and adapt as requirements change?
+The expectation is that you will show the tool and your thought process for how you built it
+
+
+JOB DESCRIPTION
+
+Insight Global is seeking an AI Automation Specialist for a 6‑month contract with likely extensions. The team prefers this role to be onsite in Fremont, CA, with Tuesday–Thursday in office. If needed, the role can be remote with PST working  hours. This is a hands‑on individual contributor role focused on building and deploying AI‑driven automations end to end. This role is focused on hands‑on execution rather than leadership or oversight, with full ownership of automation efforts from initial problem definition through deployment.
+
+ 
+
+The day‑to‑day work will involve designing, developing, and implementing automations, often starting from unknown and manual processes and transforming them into scalable automation solutions. The resource will work directly with the sourcing team and collaborate with stakeholders to understand approved tools, data access, and compliance requirements. A core responsibility will be taking large, inconsistent, and unstructured data sources, analyzing and synthesizing that data, and turning it into tangible results, such as structured datasets, dashboards, and automated reporting and processes. The successful candidate will understand the problem statements, think creatively about how AI and automation can solve it, and bring that solution to life by deploying multiple skill sets across AI, automation, data, and scripting. This includes using bots and scraping tools to gather information and report back outcomes in a clear, digestible, business‑ready format.
+
+REQUIRED SKILLS AND EXPERIENCE
+
+- Hands‑on experience building AI automation solutions end to end (e.g., Manus or similar agentic AI tools)
+
+- Experience with machine learning deployment
+
+- Experience with scraping and bot‑driven data collection
+
+- Proficiency in Python or a similar programming language
+
+- Proven ability to independently design, build, and deploy automations
+
+- Strong experience with data automation, ingestion, transformation, and synthesis
+
+- Experience working in restricted, regulated, or compliance‑driven environments
+
+- Builder mindset with strong ownership and accountability
+
+- Strong communication skills with the ability to explain complex and nuanced automation solutions clearly
+
+- Creative, resourceful, and comfortable with ambiguity
+
+NICE TO HAVE SKILLS AND EXPERIENCE
+
+- RPA experience (helps support automation beyond AI‑only solutions)
+
+- Bot‑driven data ingestion experience
+
+- Experience with Manus
+
+- Consulting experience
