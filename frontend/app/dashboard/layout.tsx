@@ -19,6 +19,7 @@ import {
   Wifi,
   WifiOff,
   ShieldCheck,
+  Upload,
 } from "lucide-react";
 
 const ADMIN_EMAIL = "sagarshankarnusa@gmail.com";
@@ -102,6 +103,7 @@ function DashboardLayoutInner({ children }: { children: React.ReactNode }) {
     { href: `/changes${managerQuery}`, label: "Change Log", icon: History },
     { href: `/market-intel${managerQuery}`, label: "Market Rates", icon: TrendingUp },
     { href: `/chat${managerQuery}`, label: "AI Chat", icon: MessageSquare },
+    ...(userRole?.isAdmin ? [{ href: `/data-upload`, label: "Data Upload", icon: Upload }] : []),
   ];
 
   const isActive = (href: string, exact?: boolean) => {

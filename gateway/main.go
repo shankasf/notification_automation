@@ -59,6 +59,20 @@ func main() {
 	// ── CSV Upload ───────────────────────────────────────────
 	r.POST("/api/requisitions/upload", handlers.UploadCSV)
 
+	// ── AI Service (proxy to Python) ─────────────────────────
+	aiProxy := handlers.GenericProxyHandler(pythonURL)
+	r.POST("/api/ai/chat", aiProxy)
+	r.POST("/api/ai/summarize", aiProxy)
+	r.POST("/api/ai/analyze", aiProxy)
+	r.POST("/api/ai/detect-changes", aiProxy)
+	r.POST("/api/ai/scrape", aiProxy)
+	r.GET("/api/ai/health", aiProxy)
+
+	// ── AI Data Upload (multi-format, multi-agent pipeline) ──
+	r.POST("/api/data-upload", handlers.DataUpload(pythonURL))
+	r.POST("/api/data-upload/progress", handlers.UploadProgress)
+	r.GET("/api/data-upload/:jobId/status", aiProxy)
+
 	// ── Notifications (direct DB) ────────────────────────────
 	r.GET("/api/notifications", handlers.ListNotifications)
 	r.PUT("/api/notifications", handlers.MarkNotificationsRead)
@@ -72,15 +86,6 @@ func main() {
 	// ── SNS Setup ───────────────────────────────────────────
 	r.POST("/api/sns/setup", handlers.SetupSNS)
 	r.GET("/api/sns/setup", handlers.GetSNSStatus)
-
-	// ── AI Service (proxy to Python) ─────────────────────────
-	aiProxy := handlers.GenericProxyHandler(pythonURL)
-	r.POST("/api/ai/chat", aiProxy)
-	r.POST("/api/ai/summarize", aiProxy)
-	r.POST("/api/ai/analyze", aiProxy)
-	r.POST("/api/ai/detect-changes", aiProxy)
-	r.POST("/api/ai/scrape", aiProxy)
-	r.GET("/api/ai/health", aiProxy)
 
 	slog.Info("starting gateway", "port", port, "python_backend", pythonURL)
 	if err := r.Run(":" + port); err != nil {

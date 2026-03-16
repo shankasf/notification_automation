@@ -167,6 +167,89 @@ The Python AI service (port 8000) powers all intelligent features. The Go gatewa
 
 ---
 
+## AI Data Upload Pipeline (Admin Only)
+
+An admin-only feature that accepts **any file format** (CSV, Excel, JSON, or messy plain text), runs it through a **multi-agent AI pipeline** to clean and transform the data, validates every record with Pydantic models, and inserts valid records into the database — all with real-time progress updates via WebSocket.
+
+### Why This Exists
+
+The existing CSV upload (`/requisitions/upload`) only handles clean, well-structured CSV files with exact column names. Real-world data is messy — people paste from emails, export from different spreadsheets, use inconsistent column names, abbreviate categories ("eng" instead of "ENGINEERING_CONTRACTORS"), write rates as "$75/hr" instead of 75.0, and misspell locations. This pipeline handles all of that automatically.
+
+### The 4-Stage Pipeline
+
+| Stage | What | How | Parallel? |
+|-------|------|-----|-----------|
+| **1. Parse** | Detect file format and extract raw records | CSV/JSON/Excel parsed programmatically (no LLM cost). Only messy unstructured text uses gpt-4.1-mini to extract records. | No (single pass) |
+| **2. Clean** | Normalize all values | LLM cleans each batch: "eng" → ENGINEERING_CONTRACTORS, "$75/hr" → 75.0, "SF" → "San Francisco, CA", fixes typos. Records processed in batches of 10 using `asyncio.gather`. | **Yes — all batches run in parallel** |
+| **3. Validate** | Enforce schema with Pydantic | `CleanedRequisition.model_validate()` checks required fields, correct types, valid enum values. No LLM call — pure Python validation. | No (instant, CPU only) |
+| **4. Upsert** | Insert into database | Generates sequential request IDs (REQ-ENG-042), inserts Requisition rows, creates RequisitionChange audit records, notifies affected managers. | No (sequential for DB consistency) |
+
+### Queue System — No Data Missed
+
+Every record tracks its own status through the pipeline:
+
+**PENDING → PARSING → CLEANING → VALIDATED → UPLOADED** (or **FAILED** with error message)
+
+If one record fails validation (e.g., missing roleTitle), it gets status FAILED while all other records continue processing normally. The final result shows exactly which records succeeded and which failed, with specific error messages. No silent data loss.
+
+### Parallel Processing for Speed
+
+The cleaning stage (stage 2) is the bottleneck — each batch requires an LLM call (~2-3 seconds). For 100 records with a batch size of 10, sequential processing would take ~20-30 seconds. With `asyncio.gather`, all 10 batches run simultaneously, completing in ~2-3 seconds total — a **10x speedup**.
+
+### Pydantic Validation (Stage 3)
+
+The `CleanedRequisition` Pydantic model enforces:
+
+- `roleTitle` — required, minimum 1 character
+- `category` — must be one of the 5 valid enum values (ENGINEERING_CONTRACTORS, CONTENT_TRUST_SAFETY, DATA_OPERATIONS, MARKETING_CREATIVE, CORPORATE_SERVICES)
+- `billRateHourly` — must be a number >= 0
+- `headcountNeeded` — must be an integer >= 1
+- `status` — must be a valid status enum (OPEN, SOURCING, INTERVIEWING, etc.)
+- `priority` — must be a valid priority enum (CRITICAL, HIGH, MEDIUM, LOW)
+- All other fields have sensible defaults (team: "Unassigned", location: "Remote", status: OPEN, priority: MEDIUM)
+
+If the LLM cleaner returns a record with invalid data (e.g., category "SALES" which doesn't exist), Pydantic catches it with a clear error message before any DB insertion is attempted.
+
+### Real-Time Progress via WebSocket
+
+As the pipeline runs, it broadcasts progress updates: Python AI service → Go gateway webhook (`POST /api/data-upload/progress`) → WebSocket broadcast to admin → Frontend updates the pipeline stepper and progress message live. The admin sees which stage is active, how many records are in each status, and any error messages — all without refreshing the page.
+
+### How It Handles Different File Types
+
+| Input | How it's parsed | LLM used? |
+|-------|----------------|-----------|
+| **CSV** | Python `csv.DictReader` — direct programmatic parsing | No |
+| **JSON** | Python `json.loads` — handles arrays, nested objects (checks for "data", "records", "items" keys) | No |
+| **Excel (.xlsx)** | `openpyxl` library — reads headers from row 1, data from row 2+ | No |
+| **Plain text / email paste / messy data** | gpt-4.1-mini extracts records from unstructured text | Yes |
+
+Structured formats (CSV, JSON, Excel) are parsed without any LLM calls — the AI is only used when the data is genuinely unstructured. This keeps costs low and speed high for clean data.
+
+### Access Control
+
+The "Data Upload" nav item in the sidebar is **only visible to admins** (users whose email matches the admin email). Regular sourcing managers cannot see or access the page. This is enforced in the sidebar navigation via `userRole?.isAdmin` conditional rendering.
+
+### API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/data-upload` | Upload a file (multipart form) — Go gateway reads file, forwards to Python AI pipeline |
+| POST | `/api/data-upload/progress` | Webhook for Python to send progress updates to Go for WebSocket broadcast |
+| GET | `/api/data-upload/:jobId/status` | Check status of a running or completed upload job |
+| POST | `/api/ai/upload/process` | Python endpoint that runs the 4-stage pipeline |
+| GET | `/api/ai/upload/status/:jobId` | Python endpoint that returns cached results for a job |
+
+### Files
+
+- `ai-service/ai_agents/upload_models.py` — Pydantic validation models (CleanedRequisition, PipelineRecord, enums)
+- `ai-service/ai_agents/upload_parser.py` — Format detection + extraction (CSV/JSON/Excel/text)
+- `ai-service/ai_agents/upload_cleaner.py` — Parallel batch cleaning with gpt-4.1-mini
+- `ai-service/ai_agents/upload_pipeline.py` — Pipeline orchestrator with progress broadcasting and DB upsert
+- `gateway/handlers/data_upload.go` — File upload handler + WebSocket progress webhook
+- `frontend/app/data-upload/page.tsx` — Admin upload page with drag-and-drop, pipeline stepper, per-record results table
+
+---
+
 ## Real-Time Change Detection — How It Works
 
 There are **two separate systems** for detecting changes. The real-time part is pure Go — no AI involved.

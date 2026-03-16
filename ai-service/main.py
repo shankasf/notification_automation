@@ -36,6 +36,7 @@ from ai_agents.change_detector import detect_changes
 from ai_agents.summarizer import summarize_changes
 from ai_agents.anomaly_detector import detect_anomalies
 from ai_agents.query_agent import process_query
+from ai_agents.upload_pipeline import run_pipeline
 from scrapers.rate_scraper import scrape_market_rates
 from email_notifier import send_manager_notification
 from anomaly_dedup import compute_fingerprint, is_duplicate, record_fingerprint, ensure_table
@@ -139,6 +140,21 @@ class ScrapeResponse(BaseModel):
     status: str
     roles_scraped: int
     duration_ms: int
+
+
+class UploadProcessRequest(BaseModel):
+    jobId: str
+    fileContent: str
+    fileType: str  # csv, json, xlsx, txt, etc.
+    rawBytes: Optional[str] = None  # base64 encoded for binary files
+
+
+class UploadProcessResponse(BaseModel):
+    jobId: str
+    status: str
+    created: int
+    failed: int
+    errors: list[str]
 
 
 # ── Routes ─────────────────────────────────────────────────────────────────
@@ -422,6 +438,80 @@ async def notify_anomaly(request: NotifyAnomalyRequest):
         },
     )
     return {"sent": sent, "skipped": skipped, "newAnomalies": new_anomalies}
+
+
+# ── Data Upload Pipeline ─────────────────────────────────────────────────
+
+# Track running jobs
+_upload_jobs: dict[str, dict] = {}
+
+
+@app.post("/api/ai/upload/process", response_model=UploadProcessResponse)
+async def process_upload(request: UploadProcessRequest):
+    """Start the multi-agent data upload pipeline."""
+    logger.info(
+        "upload_process_request",
+        extra={
+            "extra_data": {
+                "job_id": request.jobId,
+                "file_type": request.fileType,
+                "content_length": len(request.fileContent),
+            }
+        },
+    )
+
+    raw_bytes = None
+    if request.rawBytes:
+        import base64
+
+        raw_bytes = base64.b64decode(request.rawBytes)
+
+    try:
+        with trace("Upload Pipeline", metadata={"job_id": request.jobId, "file_type": request.fileType}):
+            with custom_span("upload_pipeline_execution"):
+                result = await run_pipeline(
+                    job_id=request.jobId,
+                    file_content=request.fileContent,
+                    file_type=request.fileType,
+                    raw_bytes=raw_bytes,
+                )
+        _upload_jobs[request.jobId] = result
+        logger.info(
+            "upload_process_completed",
+            extra={
+                "extra_data": {
+                    "job_id": request.jobId,
+                    "created": result["created"],
+                    "failed": result["failed"],
+                }
+            },
+        )
+        return UploadProcessResponse(
+            jobId=request.jobId,
+            status="completed",
+            created=result["created"],
+            failed=result["failed"],
+            errors=result["errors"],
+        )
+    except Exception as e:
+        logger.error(
+            "upload_process_failed",
+            extra={"extra_data": {"job_id": request.jobId, "error": str(e)}},
+            exc_info=True,
+        )
+        raise HTTPException(status_code=500, detail=f"Pipeline failed: {str(e)}")
+
+
+@app.get("/api/ai/upload/status/{job_id}")
+async def upload_status(job_id: str):
+    """Get status of an upload job."""
+    logger.info(
+        "upload_status_request",
+        extra={"extra_data": {"job_id": job_id}},
+    )
+    if job_id in _upload_jobs:
+        return _upload_jobs[job_id]
+    return {"status": "processing", "message": "Pipeline is still running"}
 
 
 # ── Background Schedulers ────────────────────────────────────────────────
