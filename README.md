@@ -223,101 +223,44 @@ Three deployments in namespace `meta-test`, exposed via ClusterIP services, rout
 
 ---
 
-## Go (Gin) vs Node.js (Express) — Scalability Comparison
+## Go (Gin) vs Node.js (Express) — Scalability Numbers
 
-### Why Go Was Chosen for the Gateway
-
-The gateway handles every API request, every WebSocket connection, every SNS publish, and every AI proxy call. The core difference is the **concurrency model**.
-
-**Node.js/Express** runs on a **single-threaded event loop** — one slow operation (DB query, JSON parse, CPU-heavy diff) blocks the entire thread. WebSocket broadcasts to 50+ connections serialize on that thread. Scaling requires clustering (multiple processes) + job queues (BullMQ/Redis) for background work.
-
-**Go (Gin)** uses **goroutines** — lightweight green threads (~2KB each) scheduled across all CPU cores by the Go runtime. Each request is independent, background work is `go func()`, and broadcasts fan out in parallel.
-
-### Head-to-Head Comparison
-
-| Operation | Node.js/Express | Go (Gin) | Winner |
-|-----------|----------------|----------|--------|
-| **100 concurrent API requests** | Single event loop — if one request does a 50ms DB query, others queue behind it during synchronous parts | 100 goroutines run in parallel, each independently waits for its own DB response | **Go** |
-| **WebSocket broadcast to 50 managers** | Serialized on the event loop — sends one message, then the next | `NotifHub.Broadcast()` fans out via goroutines — all 50 sent near-simultaneously | **Go** |
-| **SNS publish after every change** | `await sns.publish()` blocks the response or requires careful async handling | `go PublishChange(event)` — fire-and-forget goroutine, response returns instantly | **Go** |
-| **Auto-trigger AI analysis after edit** | Needs a job queue (BullMQ + Redis) or risks blocking the response | `go TriggerAnalysis(category)` — one line, runs in background, zero infra | **Go** |
-| **Memory per WebSocket connection** | ~50-100KB (V8 overhead) | ~2-4KB (goroutine stack) | **Go** |
-| **1000 WebSocket connections** | ~50-100MB memory, event loop contention | ~2-4MB memory, no contention | **Go** |
-| **Background work (7 ops per request)** | Needs BullMQ + Redis to avoid blocking | Just `go func()` — zero infrastructure | **Go** |
-
-### Raw Performance Numbers
-
-| Metric | Node.js/Express (typical) | Go/Gin (typical) |
-|--------|--------------------------|-------------------|
-| Requests/second (JSON CRUD) | ~5,000–15,000 | ~30,000–100,000+ |
-| Memory per process | ~50–150MB baseline | ~10–20MB baseline |
-| Startup time | ~1–3 seconds | ~10–50 milliseconds |
-| WebSocket broadcast (50 clients) | ~5–15ms (serialized) | ~0.5–2ms (parallel) |
-| Per-connection overhead | ~1MB per worker thread | ~2KB per goroutine |
-
-### What This Means for MetaSource
-
-When a user edits a hiring request, the Go gateway does **7 things**: query old values, execute UPDATE, insert change record, create notification, broadcast via WebSocket, publish to SNS, and trigger AI analysis. Steps 5–7 run as background goroutines — the user's HTTP response returns in ~10ms while async work continues.
-
-In Node.js, steps 5–7 would either block the response or require a job queue (BullMQ + Redis + a worker process). In Go, they're just `go func()` — zero infrastructure, zero latency impact.
-
-### Why Not Go for Everything?
-
-- **AI Service uses Python** — OpenAI Agent SDK is Python-first; scraping libs (BeautifulSoup, httpx) are Python; the service is I/O bound (waiting on OpenAI API), not CPU bound
-- **Frontend uses Next.js** — React is the standard for interactive dashboards; SSR/TypeScript/Tailwind are most productive in Node
-- **Each language is used where it's strongest**: Go for the high-throughput API layer, Python for AI/ML, TypeScript for the UI
+| Metric | Node.js/Express | Go (Gin) |
+|--------|----------------|----------|
+| Requests/sec (JSON CRUD) | 5,000–15,000 | 30,000–100,000+ |
+| Memory baseline | 50–150 MB | 10–20 MB |
+| Startup time | 1–3 sec | 10–50 ms |
+| Concurrency model | Single-threaded event loop | Goroutines (multi-core) |
+| Memory per connection | 50–100 KB | 2–4 KB |
+| 1,000 WebSocket connections | 50–100 MB | 2–4 MB |
+| WebSocket broadcast (50 clients) | 5–15 ms (serialized) | 0.5–2 ms (parallel) |
+| Background async work | Requires job queue (BullMQ + Redis) | `go func()` — zero infra |
+| Threads per request | Shared single thread | 1 goroutine (~2 KB) |
+| Max concurrent connections (single pod) | ~10,000 (event loop bottleneck) | ~100,000+ (OS limit) |
+| CPU-bound work impact | Blocks entire event loop | Blocks only that goroutine |
+| Horizontal scaling | Cluster mode (multi-process) | Single binary, multi-core native |
 
 ---
 
-## AWS SNS vs SES vs S3 — Service Comparison
+## AWS SNS vs SES vs S3 — Scalability Numbers
 
-MetaSource uses **AWS SNS** for email notifications. Here's how it compares to the other commonly confused AWS services and why SNS is the right choice.
-
-### What Each Service Does
-
-| Service | Purpose | Model | Think of it as... |
-|---------|---------|-------|-------------------|
-| **SNS** (Simple Notification Service) | Fan-out messaging to multiple subscribers | **Pub/Sub** — publish once, deliver to many | A megaphone — you shout once, everyone hears |
-| **SES** (Simple Email Service) | Full email sending platform (marketing, transactional, bulk) | **SMTP replacement** — you send to specific recipients | A post office — you address each letter individually |
-| **S3** (Simple Storage Service) | Object/file storage | **Storage** — store and retrieve files | A warehouse — you put things in and take them out |
-
-### Head-to-Head Comparison
-
-| Factor | SNS | SES | S3 |
+| Metric | SNS | SES | S3 |
 |--------|-----|-----|-----|
-| **Primary use** | Push notifications (email, SMS, Lambda, SQS, webhooks) | Sending emails (transactional, marketing, bulk) | Storing files (images, backups, logs, static assets) |
-| **Delivery model** | Pub/Sub fan-out — one publish, all subscribers receive | Direct send — you specify each recipient per email | Not a delivery service — clients pull files via URL |
-| **Email capability** | Yes — simple plain-text or basic email to subscribers | Yes — full HTML templates, attachments, custom headers, DKIM/SPF | No — stores files, doesn't send anything |
-| **SMS capability** | Yes — send SMS to phone numbers | No | No |
-| **Trigger Lambda** | Yes — SNS → Lambda | No (but SES can trigger SNS → Lambda via receipt rules) | Yes — S3 event → Lambda on upload/delete |
-| **Fan-out to queues** | Yes — SNS → SQS for decoupled processing | No | No (use S3 events → SQS) |
-| **Subscriber management** | Built-in — subscribers confirm via email/SMS, AWS manages the list | You manage your own recipient list | N/A |
-| **Email customization** | Limited — plain text or basic JSON subject/body | Full — HTML templates, dynamic variables, attachments, custom from/reply-to | N/A |
-| **Retry on failure** | Built-in (3 retries for email, configurable for HTTP) | Built-in with bounce/complaint handling | N/A |
-| **Cost (email)** | Free (email delivery always free, first 1M publishes free) | $0.10 per 1,000 emails | N/A |
-| **Cost (storage)** | No storage | No storage | $0.023/GB/month |
-| **Setup complexity** | ~50 lines of code | ~200+ lines (domain verification, DKIM, templates, bounce handling) | ~20 lines for upload/download |
-| **Best for** | Event-driven notifications, alerts, fan-out to multiple systems | Marketing emails, transactional emails with HTML templates, bulk sends | File storage, static hosting, data lakes, backups |
-
-### Why MetaSource Uses SNS (Not SES or S3)
-
-| Requirement | SNS | SES | S3 |
-|-------------|-----|-----|-----|
-| Send email on every requisition change | **Yes** — fire-and-forget publish, AWS delivers | Yes, but overkill — need to manage recipient lists, templates, bounce handling | **No** — not an email service |
-| Zero infrastructure to manage | **Yes** — no worker, no queue, no consumer | Needs domain verification, DKIM setup, bounce/complaint processing | N/A |
-| Add new subscribers without code changes | **Yes** — `POST /api/sns/setup`, subscriber confirms via email | Need to update recipient list in code or database | N/A |
-| Fan-out to multiple channels (email + SMS + Lambda) | **Yes** — add subscribers of different types to same topic | Email only | N/A |
-| Cost at our scale (~30K changes/month) | **$0/month** (3% of free tier) | ~$3/month | N/A |
-
-**The bottom line**: SNS is the right tool for **event-driven alerts** where you publish once and AWS handles delivery to all subscribers. SES is the right tool for **custom email campaigns** where you need HTML templates, personalization, and bulk sending. S3 is for **storing files**, not sending notifications. MetaSource needs event-driven alerts → SNS.
-
-### When You Would Switch to SES
-
-You'd add SES alongside SNS if you needed: custom HTML email templates with your brand styling, personalized per-manager email content (different body per recipient), email analytics (open rates, click tracking), attachments in notification emails, or marketing/digest emails separate from real-time alerts.
-
-### When You Would Use S3
-
-You'd add S3 for: storing uploaded CSV/Excel files before processing, archiving notification history as JSON files, hosting static frontend assets (if moving off k8s), or storing AI-generated reports as downloadable PDFs.
+| **What it does** | Pub/Sub notifications (email, SMS, Lambda, SQS) | Email sending (transactional, marketing, bulk) | Object/file storage |
+| **Throughput** | 30,000 publishes/sec (soft limit) | 200 emails/sec (sandbox), 50,000/sec (production) | 5,500 PUT/sec per prefix, 55,000 GET/sec per prefix |
+| **Max message/object size** | 256 KB | 40 MB (with attachments) | 5 TB per object |
+| **Subscribers/recipients per request** | 12.5M subscribers per topic | 50 recipients per call | N/A |
+| **Free tier** | 1M publishes/month + free email delivery | 62,000 emails/month (from EC2) | 5 GB storage + 20,000 GET + 2,000 PUT/month |
+| **Cost after free tier** | $0.50 per 1M publishes | $0.10 per 1,000 emails | $0.023/GB storage, $0.0004/1K requests |
+| **Delivery model** | Push — AWS delivers to all subscribers | Push — you specify each recipient | Pull — clients fetch via URL/API |
+| **Latency** | ~1–2 sec (email), ~100 ms (Lambda/SQS) | ~1–3 sec (email) | ~10–100 ms (GET/PUT) |
+| **Retry on failure** | 3 retries (email), configurable (HTTP) | Built-in with bounce/complaint handling | N/A |
+| **Fan-out** | 1 publish → all subscribers (email + SMS + Lambda + SQS + HTTP) | 1 call → 1 email (no fan-out) | S3 events → SNS/SQS/Lambda |
+| **Subscriber management** | Built-in (confirm via email/SMS) | You manage recipient lists | N/A |
+| **Durability** | N/A (delivery, not storage) | N/A (delivery, not storage) | 99.999999999% (11 nines) |
+| **Availability SLA** | 99.9% | 99.9% | 99.99% |
+| **Setup lines of code** | ~50 | ~200+ (domain verification, DKIM, templates) | ~20 |
+| **MetaSource usage** | Email alerts on every change ($0/month at 30K changes) | Not used — overkill for simple alerts | Not used — no file storage needed |
 
 ---
 
