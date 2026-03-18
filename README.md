@@ -1,349 +1,348 @@
-# MetaSource — AI-Powered Sourcing Manager Notification Platform
+# MetaSource — Intelligent Workforce Sourcing Platform
 
-An automated notification system for 5 sourcing managers tracking a dynamic workforce requisition dataset. The platform detects changes in real time, routes relevant updates to the correct manager, uses AI to summarize and prioritize notifications, and sends email alerts via AWS SNS — all with zero manual intervention.
+A platform that helps sourcing managers track contractor hiring requests without any manual effort. When someone changes a hiring request — updates a bill rate, fills a position, changes status — the system instantly detects it, notifies the right manager, summarizes what happened using AI, and sends an email alert. All automatic.
 
-**Live URL**: [https://meta.callsphere.tech](https://meta.callsphere.tech)
-**K8s Namespace**: `meta-test`
-
----
-
-## Problem Statement
-
-> We have a dynamic dataset that is frequently changed, causing problems for a group of five sourcing managers. Currently, these managers are either notified manually via chat or must proactively check the dataset themselves.
-
-## Solution
-
-1. **Change Detection** — Every create, update, delete, and bulk import is tracked at the field level
-2. **Smart Routing** — Category-based routing ensures each manager sees only their relevant updates
-3. **AI Summarization** — OpenAI agents generate human-readable summaries of change batches
-4. **Real-Time Push** — WebSocket broadcasts deliver instant in-app notifications
-5. **Email Alerts via AWS SNS** — Every change triggers an email to the admin via SNS
-6. **Anomaly Detection** — AI flags unusual patterns (price spikes, quantity drops, stale items)
+**Live**: [https://meta.callsphere.tech](https://meta.callsphere.tech)
 
 ---
 
-## Tech Stack
+## What It Does
 
-| Layer | Technology |
-|-------|-----------|
-| **Frontend** | Next.js 15, TypeScript, Tailwind CSS, shadcn/ui |
-| **Gateway** | Go (Gin), WebSocket (Gorilla), AWS SNS SDK |
-| **AI Service** | Python (FastAPI), OpenAI Agent SDK (gpt-4.1 / gpt-4.1-mini) |
-| **Database** | PostgreSQL (Prisma ORM for schema, raw SQL in Go) |
-| **Infrastructure** | k3s, Traefik (TLS ingress), cert-manager |
+Five sourcing managers each own a category of hiring requests (engineering contractors, content & trust/safety, data operations, marketing/creative, corporate services). The platform:
 
----
+- **Detects every change** — field-level tracking captures exactly what changed, by whom, and when
+- **Routes to the right person** — each manager only sees updates for their category
+- **Updates dashboards in real time** — WebSocket push means counts and stats refresh instantly, no page reload needed
+- **Summarizes with AI** — instead of raw field diffs, managers get plain English summaries like "Bill rate for Senior DevOps increased from $75 to $95/hr"
+- **Sends email alerts** — every change triggers an email via AWS SNS
+- **Flags problems automatically** — AI scans for anomalies like price spikes, budget overruns, and stale requests
 
-## High-Level System Design
+### What Managers See
 
-### Architecture Overview
+| Page | What's There |
+|------|-------------|
+| **Home** | All 5 managers' active request counts, unfilled positions, and alert badges — updates live via WebSocket |
+| **Dashboard** | Stats cards (total requests, unfilled positions, budget, critical priority), category pie chart, status bar chart, recent changes timeline |
+| **Hiring Requests** | Full data grid with inline editing, status/priority dropdowns, search, filters, pagination, CSV upload |
+| **Notifications** | All alerts with read/unread state, AI-generated summaries |
+| **Change Log** | Complete audit trail of every field change across all requests |
+| **Market Rates** | Benchmarking data for contractor rates |
+| **AI Chat** | Ask questions in plain English — "What are the highest bill rates in engineering?" |
 
-Three microservices behind a Traefik reverse proxy with TLS:
+### Admin vs Manager
 
-```
-                         ┌─────────────────────────────┐
-                         │     Traefik (TLS Ingress)    │
-                         │   meta.callsphere.tech:443   │
-                         └────┬──────────┬──────────┬───┘
-                              │          │          │
-                     /api/sns/* │   /api/* & /ws/*   │  /*
-                              │          │          │
-                              v          v          v
-                      ┌───────────┐ ┌──────────┐ ┌───────────────┐
-                      │  Next.js  │ │    Go    │ │   Next.js     │
-                      │ Frontend  │ │ Gateway  │ │  (SSR pages)  │
-                      │  :3000    │ │  :8080   │ │   :3000       │
-                      └───────────┘ └────┬─────┘ └───────────────┘
-                                         │
-                              ┌──────────┼──────────┐
-                              │          │          │
-                              v          v          v
-                      ┌────────────┐ ┌───────┐ ┌─────────┐
-                      │ Python AI  │ │  AWS  │ │PostgreSQL│
-                      │  Service   │ │  SNS  │ │meta_source│
-                      │   :8000    │ │(email)│ │  :5432   │
-                      └────────────┘ └───────┘ └─────────┘
-```
-
-### Service Responsibilities
-
-- **Next.js Frontend** (port 3000) — Dashboard, hiring request data grid, notification center, AI chat, audit log, market rate charts, SNS setup API route
-- **Go Gateway** (port 8080) — All CRUD endpoints, real-time WebSocket push, SNS publish, AI proxy, CSV/bulk import, notification routing
-- **Python AI Service** (port 8000) — OpenAI agents for summarization, anomaly detection, natural language Q&A, market rate collection
-
-All three connect to **PostgreSQL** (database: `meta_source`). The gateway also publishes to **AWS SNS** topic (`metasource-requisition-changes`) for email delivery.
-
-### Data Flow — What Happens on a Change
-
-```
-User edits a field in the UI
-        │
-        v
-  PUT /api/requisitions/:id → Go Gateway
-        │
-        ├── 1. SELECT old values from DB        (<1ms)
-        ├── 2. track() field-level diff           (<1ms)
-        ├── 3. INSERT RequisitionChange record    (<5ms)
-        ├── 4. UPDATE Requisition row             (<5ms)
-        │
-        └── Then in PARALLEL (goroutines):
-            ├── WebSocket broadcast to manager    (~50ms)
-            ├── INSERT Notification record
-            ├── go PublishChange() → AWS SNS      (~1-2s, async)
-            └── go TriggerAnalysis() → AI service (~2-5s, async)
-```
-
-### Background Schedulers
-
-| Scheduler | Frequency | Purpose |
-|-----------|-----------|---------|
-| Change Summarizer | Every 15 min | Finds unsummarized changes, sends to gpt-4.1-mini, creates notification with AI summary |
-| Anomaly Scanner | Daily 10 AM UTC | Scans all 5 categories for unusual patterns, deduplicates with 24h fingerprint |
-
-### Notification Channels
-
-| Channel | Latency | How |
-|---------|---------|-----|
-| **WebSocket** (in-app) | ~50ms | Go gateway broadcasts to connected browsers |
-| **Email** (SNS) | ~1-2s | Fire-and-forget goroutine → AWS SNS → email subscribers |
-| **AI Summary** | ~15 min | Background batch summarization via gpt-4.1-mini |
-
-### Category-Based Routing
-
-| Manager | Category |
-|---------|----------|
-| Sarah Chen | ENGINEERING_CONTRACTORS |
-| Marcus Johnson | CONTENT_TRUST_SAFETY |
-| Priya Patel | DATA_OPERATIONS |
-| David Kim | MARKETING_CREATIVE |
-| Lisa Martinez | CORPORATE_SERVICES |
-
-Every requisition belongs to one category → one manager. Routing is a DB lookup, not hardcoded — add a manager by inserting a row.
+- **Admin** sees all 5 managers' data, can edit any category, access the data upload pipeline
+- **Managers** are auto-redirected to their own dashboard, can only edit their category's requests
+- Both get real-time updates — admin receives WebSocket events for all managers
 
 ---
 
-## Low-Level System Design
+## How It Works
 
-### Go Gateway — Concurrency Model
+### The Change Flow (What Happens When Someone Edits a Request)
 
-The gateway uses **goroutines** (~2KB each) instead of Node.js's single-threaded event loop:
+```
+User changes status from OPEN to COMPLETED
+    |
+    v
+Go Gateway receives PUT /api/requisitions/:id
+    |
+    |-- 1. Reads current values from database
+    |-- 2. Compares old vs new (field-level diff)
+    |-- 3. Saves change record (who, what, when)
+    |-- 4. Updates the requisition
+    |
+    Then fires 4 things in parallel:
+        |-- WebSocket broadcast to that manager + all admins (~50ms)
+        |-- Creates notification in database
+        |-- Sends email via AWS SNS (~1-2s)
+        |-- Triggers AI anomaly check (~2-5s)
+    |
+    v
+Manager's browser receives WebSocket event
+    |-- Dashboard refetches stats (counts drop because COMPLETED is excluded)
+    |-- Home page refetches manager cards (same)
+    |-- Toast notification appears
+    |-- Notification badge increments
+```
 
-- Each HTTP request gets its own goroutine — a slow DB query never blocks other requests
-- `go func()` launches background work (SNS publish, AI analysis) with zero overhead — no job queue (BullMQ/Redis) needed
-- `NotifHub.Broadcast()` fans out WebSocket messages across goroutines in parallel
-- 1000 WebSocket connections = ~4MB memory (vs ~100MB in Node.js)
+### Real-Time Updates
 
-**Per-request execution**: query old values → field-level diff → INSERT change → UPDATE row → then 4 goroutines fire in parallel (WebSocket, notification, SNS, AI analysis). The user's response returns after the DB operations (~10ms); async work continues in background goroutines.
+Every page that shows data listens for WebSocket events and silently refetches when something changes:
 
-### Field-Level Change Detection (track())
+| Page | Listens For | What Refreshes |
+|------|-------------|----------------|
+| **Home page** | `change`, `notification`, `refresh` | All manager cards, total hiring requests, unfilled positions, alerts count |
+| **Dashboard** | `change`, `notification` | All stat cards, charts, recent changes |
+| **Hiring Requests** | `change` | Table data, total count, pagination |
+| **Notifications** | `notification`, `read` | Notification list, unread badge in sidebar |
 
-Located in `gateway/handlers/requisitions.go`. Pure string comparison — no AI:
+The WebSocket hub routes messages correctly:
+- A change to an Engineering request goes to the Engineering manager's browser AND all admin browsers
+- Admin connections receive events for every manager
 
-1. SELECT current row before update
-2. Compare each field: `if oldVal != newVal` → create change record
-3. Change type classification: STATUS_CHANGE, RATE_CHANGE, HEADCOUNT_CHANGE, BUDGET_CHANGE, etc.
-4. INSERT into `RequisitionChange` with field name, old value, new value, who changed it
+### Active Request Counting
 
-### WebSocket Hub (NotifHub)
+The "Total Hiring Requests" and "Unfilled Positions" numbers on both the home page and dashboard **only count active requests**. Requests with status COMPLETED or CANCELLED are excluded from these headline numbers. The status distribution chart on the dashboard still shows all statuses for the full picture.
 
-- Each client registers with a `managerId` on connect
-- Broadcasts filter by managerId — managers only receive their category's events
-- Admin connections receive all events (no managerId filter)
-- Connection cleanup on disconnect via goroutine
+### AI Features
 
-### AWS SNS Integration
+| Feature | What It Does | When It Runs |
+|---------|-------------|--------------|
+| **Change Summaries** | Turns "billRateHourly: 75 -> 95" into "Bill rate increased by 27% for Senior DevOps role" | Every 15 minutes (batch) |
+| **Anomaly Detection** | Flags rate spikes >10%, budgets >90% used, requests stale >30 days | On each change + daily scan |
+| **Chat Assistant** | Answers questions like "Which category has the most unfilled positions?" using 6 database query tools | On demand |
+| **Data Upload Pipeline** | Ingests CSV, Excel, JSON, or messy text files — AI cleans and normalizes data | Admin-triggered |
 
-**Why SNS over SQS**: SNS is push-based (no worker/consumer needed), free tier covers 1M requests/month, and email delivery is always free. Fire-and-forget from the gateway — AWS handles retries and delivery. SQS would only be needed for batched digests or exactly-once processing.
+### Email Alerts (AWS SNS)
 
-**Flow**: Change → `go PublishChange(event)` goroutine → SNS topic → email to all subscribers
+Every change publishes to an SNS topic. Subscribe any email address via `POST /api/sns/setup` — AWS handles confirmation and delivery. No email server, no SMTP config, no worker process.
 
-**Setup**: `POST /api/sns/setup` with `{"email": "someone@company.com"}` → AWS sends confirmation email → subscriber starts receiving alerts.
+---
 
-### AI Agents (Python Service)
+## Architecture
 
-| Agent | Model | Trigger | Purpose |
-|-------|-------|---------|---------|
-| **Q&A Chat Assistant** | gpt-4.1 | User clicks chat | Answers NL questions using 6 DB query tools |
-| **Change Summarizer** | gpt-4.1-mini | Every 15 min (scheduler) | Batch-summarizes raw field diffs into readable text |
-| **Anomaly Detector** | gpt-4.1-mini | Per-change (async) + daily scan | Flags rate spikes >10%, budget >90%, stale requests >30d |
-| **Change Detector** | None (SQL only) | Every 15 min | Finds unsummarized changes via `WHERE summary IS NULL` |
-| **Market Rate Collector** | None | User-triggered | Generates market rate benchmarking data |
+Three microservices behind Traefik (TLS ingress) on k3s:
 
-**AI proxy pattern**: Frontend → Go Gateway `/api/ai/*` → Python AI Service `:8000` → OpenAI API
+```
+Browser
+  |
+  v
+Traefik (meta.callsphere.tech:443)
+  |
+  |-- /api/*  -->  Go Gateway (:8080)
+  |-- /ws/*   -->  Go Gateway (:8080)
+  |-- /*      -->  Next.js Frontend (:3000)
+  |
+  v
+Go Gateway connects to:
+  |-- PostgreSQL (meta_source database)
+  |-- Python AI Service (:8000) --> OpenAI API
+  |-- AWS SNS (email delivery)
+```
 
-### AI Data Upload Pipeline (Admin Only)
+### Services
 
-A 4-stage pipeline for ingesting any file format (CSV, Excel, JSON, messy text):
+| Service | Technology | Role |
+|---------|-----------|------|
+| **Frontend** | Next.js 15, TypeScript, Tailwind CSS, shadcn/ui, Recharts | Dashboard UI, data grid, notification center, AI chat, Google OAuth |
+| **Gateway** | Go (Gin), Gorilla WebSocket, AWS SNS SDK | All CRUD APIs, real-time WebSocket push, change tracking, notification routing, CSV import, AI proxy |
+| **AI Service** | Python (FastAPI), OpenAI Agent SDK (gpt-4.1 / gpt-4.1-mini) | Summarization, anomaly detection, chat Q&A, data cleaning, market rates |
+| **Database** | PostgreSQL, Prisma (schema/migrations), raw SQL in Go | All data storage — requisitions, changes, notifications, managers, chat history |
 
-1. **Parse** — Detect format, extract raw records (CSV/JSON/Excel are programmatic; only unstructured text uses gpt-4.1-mini)
-2. **Clean** — LLM normalizes values in parallel batches of 10 via `asyncio.gather` ("eng" → ENGINEERING_CONTRACTORS, "$75/hr" → 75.0)
-3. **Validate** — Pydantic model enforces schema (required fields, valid enums, correct types)
-4. **Upsert** — Sequential DB insert with audit records and manager notifications
+### Database Tables
 
-Each record tracks status: PENDING → PARSING → CLEANING → VALIDATED → UPLOADED (or FAILED with error). Real-time progress via WebSocket.
+9 tables in PostgreSQL, managed via Prisma ORM.
 
-### Anomaly Deduplication
+**SourcingManager** — 5 managers, each assigned one category
 
-24-hour fingerprint-based dedup prevents notification spam. Each anomaly is hashed (category + anomaly type + key details). If the same fingerprint was sent within 24h, it's suppressed. Stored in-memory with TTL cleanup.
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID | PK |
+| name | String | |
+| email | String | Unique |
+| category | RequisitionCategory | Enum |
+| avatarUrl | String? | |
+| createdAt | DateTime | Default: now |
 
-### Database Schema
+**Requisition** — Hiring requests
 
-| Model | Purpose |
-|-------|---------|
-| **SourcingManager** | 5 managers, each assigned a RequisitionCategory |
-| **Requisition** | Hiring requests with status, priority, bill rate, headcount, budget |
-| **RequisitionChange** | Field-level audit trail (old → new) with AI summaries |
-| **Notification** | Per-manager alerts (CHANGE_SUMMARY, ANOMALY_ALERT, BUDGET_WARNING, MILESTONE) |
-| **NotificationRule** | Per-manager filtering rules (priority thresholds, change types) |
-| **MarketRate** | Market rate benchmarking data |
-| **ChatSession** | AI chat conversation history |
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID | PK |
+| requisitionId | String | Unique (display ID) |
+| team | String | |
+| department | String | |
+| roleTitle | String | |
+| category | RequisitionCategory | Enum |
+| headcountNeeded | Int | |
+| headcountFilled | Int | Default: 0 |
+| vendor | String | |
+| billRateHourly | Float | |
+| location | String | |
+| status | RequisitionStatus | Default: OPEN |
+| priority | Priority | Default: MEDIUM |
+| budgetAllocated | Float | |
+| budgetSpent | Float | Default: 0 |
+| startDate | DateTime? | |
+| endDate | DateTime? | |
+| notes | String? | |
+| createdAt | DateTime | Default: now |
+| updatedAt | DateTime | Auto-updated |
+
+**RequisitionChange** — Every field change with old/new values, AI summary
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID | PK |
+| requisitionId | String | FK → Requisition (CASCADE) |
+| changeType | ChangeType | Enum |
+| fieldChanged | String? | |
+| oldValue | String? | |
+| newValue | String? | |
+| changedBy | String | Default: "system" |
+| summary | String? | AI-generated |
+| createdAt | DateTime | Default: now |
+
+**Notification** — Per-manager alerts
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID | PK |
+| managerId | String | FK → SourcingManager (CASCADE) |
+| type | NotificationType | Enum |
+| title | String | |
+| message | String | |
+| isRead | Boolean | Default: false |
+| metadata | Json? | |
+| createdAt | DateTime | Default: now |
+
+**NotificationRule** — Per-manager filtering preferences
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID | PK |
+| managerId | String | FK → SourcingManager (CASCADE) |
+| ruleType | String | |
+| threshold | Float? | |
+| isEnabled | Boolean | Default: true |
+| createdAt | DateTime | Default: now |
+
+**MarketRate** — Contractor rate benchmarks
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID | PK |
+| roleTitle | String | |
+| category | RequisitionCategory | Enum |
+| location | String | |
+| minRate | Float | |
+| maxRate | Float | |
+| medianRate | Float | |
+| source | String | |
+| scrapedAt | DateTime | Default: now |
+
+**ChatSession** — AI chat conversation history
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID | PK |
+| managerId | String? | |
+| messages | Json | Default: [] |
+| createdAt | DateTime | Default: now |
+| updatedAt | DateTime | Auto-updated |
+
+**AnomalyFingerprint** — 24h dedup for anomaly notifications
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID | PK |
+| fingerprint | String | Indexed with createdAt |
+| category | String | |
+| severity | String | |
+| managerId | String? | |
+| createdAt | DateTime | Default: now |
+
+**ScrapeLog** — Web scraping history
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID | PK |
+| source | String | |
+| rolesScraped | Int | |
+| status | String | |
+| duration | Int | |
+| error | String? | |
+| createdAt | DateTime | Default: now |
+
+**Enums**: RequisitionCategory (5 values: ENGINEERING_CONTRACTORS, CONTENT_TRUST_SAFETY, DATA_OPERATIONS, MARKETING_CREATIVE, CORPORATE_SERVICES) · RequisitionStatus (8: OPEN → SOURCING → INTERVIEWING → OFFER → ONBOARDING → ACTIVE → COMPLETED, CANCELLED) · Priority (4: CRITICAL, HIGH, MEDIUM, LOW) · ChangeType (7: CREATED, UPDATED, STATUS_CHANGE, RATE_CHANGE, HEADCOUNT_CHANGE, BUDGET_CHANGE, BULK_IMPORT) · NotificationType (4: CHANGE_SUMMARY, ANOMALY_ALERT, BUDGET_WARNING, MILESTONE)
+
+### Requisition Statuses
+
+OPEN → SOURCING → INTERVIEWING → OFFER → ONBOARDING → ACTIVE → COMPLETED
+
+Requests can also be CANCELLED. Only OPEN through ACTIVE count as "active" in dashboard totals.
 
 ### API Endpoints
 
-**Requisitions**: GET/POST/PUT/DELETE `/api/requisitions`, POST `/api/requisitions/upload` (bulk CSV)
-**Notifications**: GET/PUT `/api/notifications`, GET `/api/changes`, GET `/api/managers`, GET `/api/stats`
-**SNS**: POST/GET `/api/sns/setup`
-**AI**: POST `/api/ai/chat`, `/api/ai/summarize`, `/api/ai/analyze`, `/api/ai/detect-changes`, `/api/ai/scrape`
-**Data Upload**: POST `/api/data-upload`, GET `/api/data-upload/:jobId/status`
-
-### Kubernetes Deployment
-
-Three deployments in namespace `meta-test`, exposed via ClusterIP services, routed by Traefik IngressRoute with TLS. Secrets: `openai-secret` (OPENAI_API_KEY), `aws-secret` (AWS credentials).
-
-### Scalability
-
-| Dimension | How It Scales |
-|-----------|---------------|
-| Managers | Add DB row + SNS subscription, no code changes |
-| Categories | Add enum value, routing is automatic |
-| Requisitions | PostgreSQL with pagination + indexing handles millions |
-| API throughput | Go handles 30K-100K req/sec; scale with `kubectl scale --replicas` |
-| AI processing | Stateless Python pods; scale with replicas |
-| Notifications | SNS free tier: 1M/month; add SMS/Lambda/SQS subscribers without code |
+| Group | Endpoints |
+|-------|----------|
+| **Requisitions** | GET/POST/PUT/DELETE `/api/requisitions`, POST `/api/requisitions/upload` |
+| **Stats & Managers** | GET `/api/stats`, GET `/api/managers`, GET `/api/changes` |
+| **Notifications** | GET/PUT `/api/notifications` |
+| **SNS** | POST/GET `/api/sns/setup` |
+| **AI** | POST `/api/ai/chat`, `/api/ai/summarize`, `/api/ai/analyze`, `/api/ai/detect-changes`, `/api/ai/scrape` |
+| **Data Upload** | POST `/api/data-upload`, GET `/api/data-upload/:jobId/status` |
 
 ---
 
-## Go (Gin) vs Node.js (Express) — Scalability Numbers
+## Technical Details
+
+### Why Go for the Gateway
+
+Each requisition update triggers 7 operations (read old values, diff, save change, update row, WebSocket broadcast, create notification, SNS publish). In Go, the async operations are `go func()` — zero infrastructure. In Node.js, you'd need BullMQ + Redis for the same thing.
 
 | Metric | Node.js/Express | Go (Gin) |
 |--------|----------------|----------|
-| Requests/sec (JSON CRUD) | 5,000–15,000 | 30,000–100,000+ |
-| Memory baseline | 50–150 MB | 10–20 MB |
-| Startup time | 1–3 sec | 10–50 ms |
-| Concurrency model | Single-threaded event loop | Goroutines (multi-core) |
-| Memory per connection | 50–100 KB | 2–4 KB |
-| 1,000 WebSocket connections | 50–100 MB | 2–4 MB |
-| WebSocket broadcast (50 clients) | 5–15 ms (serialized) | 0.5–2 ms (parallel) |
-| Background async work | Requires job queue (BullMQ + Redis) | `go func()` — zero infra |
-| Threads per request | Shared single thread | 1 goroutine (~2 KB) |
-| Max concurrent connections (single pod) | ~10,000 (event loop bottleneck) | ~100,000+ (OS limit) |
-| CPU-bound work impact | Blocks entire event loop | Blocks only that goroutine |
-| Horizontal scaling | Cluster mode (multi-process) | Single binary, multi-core native |
+| Requests/sec | 5,000–15,000 | 30,000–100,000+ |
+| Memory per WebSocket connection | 50–100 KB | 2–4 KB |
+| Background async work | Requires job queue + Redis | `go func()` — built in |
+| 1,000 WebSocket connections | 50–100 MB RAM | 2–4 MB RAM |
+
+### WebSocket Hub
+
+- Connections register with a `managerId` (or "admin" for admin users)
+- On broadcast: sends to the target manager's connections + all admin connections
+- Auto-reconnect with exponential backoff on the client side
+- Connection cleanup on disconnect
+
+### Field-Level Change Tracking
+
+The `track()` function in `requisitions.go` compares old vs new for each field. No AI — pure string comparison. Each change gets a type: STATUS_CHANGE, RATE_CHANGE, HEADCOUNT_CHANGE, BUDGET_CHANGE, or UPDATED.
+
+### AI Data Upload Pipeline
+
+4 stages for ingesting any file format:
+
+1. **Parse** — Detect format, extract records (structured formats are programmatic; only unstructured text uses AI)
+2. **Clean** — AI normalizes values in parallel batches ("eng" → ENGINEERING_CONTRACTORS, "$75/hr" → 75.0)
+3. **Validate** — Pydantic schema enforcement (required fields, valid enums, correct types)
+4. **Upsert** — Sequential DB insert with audit records and notifications
+
+### Anomaly Deduplication
+
+24-hour fingerprint-based dedup prevents notification spam. Each anomaly is hashed (category + type + key details). Same fingerprint within 24h is suppressed.
+
+### Kubernetes Deployment
+
+Three deployments in namespace `meta-test`. Traefik IngressRoute with TLS via cert-manager. Secrets: `openai-secret`, `aws-secret`.
+
+Resource allocation (small dataset):
+
+| Service | CPU (request/limit) | Memory (request/limit) |
+|---------|-------------------|----------------------|
+| Frontend | 100m / 500m | 512Mi / 1.5Gi |
+| Gateway | 25m / 200m | 128Mi / 256Mi |
+| AI Service | 50m / 300m | 256Mi / 512Mi |
+
+### Scaling
+
+| What | How |
+|------|-----|
+| Add a manager | INSERT one DB row + subscribe their email to SNS |
+| Add a category | Add enum value — routing is automatic |
+| More requests | PostgreSQL with pagination + indexing handles millions |
+| More traffic | `kubectl scale --replicas` — all services are stateless |
+| More notification channels | One `go func()` in the gateway — SNS already supports SMS, Lambda, SQS, HTTP |
 
 ---
 
-## AWS SNS vs SES vs S3 — Scalability Numbers
+## Project Structure
 
-| Metric | SNS | SES | S3 |
-|--------|-----|-----|-----|
-| **What it does** | Pub/Sub notifications (email, SMS, Lambda, SQS) | Email sending (transactional, marketing, bulk) | Object/file storage |
-| **Throughput** | 30,000 publishes/sec (soft limit) | 200 emails/sec (sandbox), 50,000/sec (production) | 5,500 PUT/sec per prefix, 55,000 GET/sec per prefix |
-| **Max message/object size** | 256 KB | 40 MB (with attachments) | 5 TB per object |
-| **Subscribers/recipients per request** | 12.5M subscribers per topic | 50 recipients per call | N/A |
-| **Free tier** | 1M publishes/month + free email delivery | 62,000 emails/month (from EC2) | 5 GB storage + 20,000 GET + 2,000 PUT/month |
-| **Cost after free tier** | $0.50 per 1M publishes | $0.10 per 1,000 emails | $0.023/GB storage, $0.0004/1K requests |
-| **Delivery model** | Push — AWS delivers to all subscribers | Push — you specify each recipient | Pull — clients fetch via URL/API |
-| **Latency** | ~1–2 sec (email), ~100 ms (Lambda/SQS) | ~1–3 sec (email) | ~10–100 ms (GET/PUT) |
-| **Retry on failure** | 3 retries (email), configurable (HTTP) | Built-in with bounce/complaint handling | N/A |
-| **Fan-out** | 1 publish → all subscribers (email + SMS + Lambda + SQS + HTTP) | 1 call → 1 email (no fan-out) | S3 events → SNS/SQS/Lambda |
-| **Subscriber management** | Built-in (confirm via email/SMS) | You manage recipient lists | N/A |
-| **Durability** | N/A (delivery, not storage) | N/A (delivery, not storage) | 99.999999999% (11 nines) |
-| **Availability SLA** | 99.9% | 99.9% | 99.99% |
-| **Setup lines of code** | ~50 | ~200+ (domain verification, DKIM, templates) | ~20 |
-| **MetaSource usage** | Email alerts on every change ($0/month at 30K changes) | Not used — overkill for simple alerts | Not used — no file storage needed |
-
----
-
-## Interview Questions — Design Decisions
-
-### Q1: How will you automate the notification and information delivery process?
-
-**Zero manual intervention.** Every change is detected, recorded, routed, and delivered automatically through three parallel channels.
-
-**On every edit**: Go gateway does field-level diff (track()), then fires 4 parallel goroutines — WebSocket broadcast (~50ms), DB notification record, AWS SNS email (~1-2s), and AI anomaly check (~2-5s). The manager's browser gets a toast notification within 50ms.
-
-**Background automation**: Change Summarizer runs every 15 min — finds unsummarized changes, sends to gpt-4.1-mini, creates notification + email. Anomaly Scanner runs daily — scans all categories for rate spikes, budget overruns, stale requests.
-
-**What managers never have to do**: Check the dataset manually, figure out what changed (AI summarizes), watch for problems (AI anomaly detection), or ask "what happened while I was away?" (AI Chat answers NL questions).
-
-**Bot-driven data collection**: Market Rate Collector populates benchmarking data. CSV bulk import creates change records + notifications per category automatically.
-
----
-
-### Q2: How will your approach handle growth (more managers, larger datasets)?
-
-**Every scaling dimension was considered during architecture, not as an afterthought.**
-
-**Adding managers**: One DB INSERT — routing is a database lookup (`SELECT id FROM SourcingManager WHERE category = $1`), not hardcoded. Add an SNS subscriber via `POST /api/sns/setup` for email alerts.
-
-**Larger datasets**: PostgreSQL handles millions of rows with pagination + indexing. The 15-min summarizer processes in batches. Go goroutines use ~2-4KB per WebSocket connection (1000 connections = ~4MB).
-
-**Why Go helps**: The gateway handles 7 operations per request. In Node.js, async operations would need BullMQ + Redis. In Go, they're just `go func()` — zero-infrastructure concurrency, 30K-100K req/sec on a single pod.
-
-**Horizontal scaling**: All services are stateless in Kubernetes — `kubectl scale deployment meta-gateway --replicas=3` for 3x throughput. The only shared state is PostgreSQL.
-
----
-
-### Q3: How will you ensure each manager receives only relevant information but captures all changes?
-
-**Every change is captured once (audit trail), but only routed to the owning manager.**
-
-**Routing**: Every requisition belongs to one category → one manager. The gateway looks up the manager and only notifies them.
-
-**Where filtering happens**:
-- **WebSocket** — Each connection registers with a managerId; broadcasts target only that manager + admin
-- **Notification table** — Each notification tied to one managerId via foreign key
-- **Dashboard/API** — `?managerId=X` resolves to the manager's category and filters all queries
-- **AI Chat** — Query agent receives managerId as context, focuses on their category
-- **Email (SNS)** — Messages include category as a message attribute for subscriber filtering
-
-**All changes are captured**: The `RequisitionChange` table stores every change to every requisition regardless of category. Routing controls who gets notified, not what gets recorded.
-
----
-
-### Q4: How will you ensure the solution is easy to maintain and adapt?
-
-**Three separate services, each in the language best suited for its job, with clear boundaries.**
-
-**Separation of concerns**:
-- **frontend/** — UI only, no business logic. Change UI without touching backend.
-- **gateway/** — API + real-time. Change notification logic without touching UI or AI.
-- **ai-service/** — AI only. Swap models or add agents without touching the API.
-
-**Adding a notification channel**: One more `go func()` in the gateway's fan-out. Adding Slack = one new goroutine. SNS already supports SMS/Lambda/SQS/webhooks without code changes.
-
-**Adding an AI agent**: Self-contained Python file + endpoint in main.py + proxy route in gateway. No changes to existing agents.
-
-**Schema changes**: Prisma manages migrations. Add field to model → `npx prisma migrate dev` → TypeScript types auto-generated.
-
-**Adapting notification rules**: The `track()` function in `requisitions.go` is the single place to add filtering logic. The `NotificationRule` table already supports per-manager rules.
-
-**Infrastructure is declarative**: All Kubernetes YAML in `k8s/`. Move servers with `kubectl apply -f k8s/`. Scale by changing `replicas`.
-
----
-
-### Design Decision Summary
-
-| Decision | Why | Alternative Considered |
-|----------|-----|----------------------|
-| Go for gateway | Real-time WebSocket + 7 async ops per request without a job queue | Node.js — would need BullMQ + Redis |
-| Python for AI | OpenAI Agent SDK is Python-first, scraping libs are Python | Node.js — Agent SDK features are Python-only |
-| Next.js for frontend | SSR, TypeScript, Tailwind, React ecosystem for dashboards | Plain React SPA |
-| AWS SNS for email | Zero infrastructure, free tier (1M/month), fire-and-forget | SQS + worker process |
-| WebSocket for real-time | Instant (<50ms), no polling overhead | Polling every 5s |
-| Category-based routing | Simple, deterministic, scales by adding DB rows | Tag-based routing |
-| Field-level change tracking | Managers need "billRate: $75 → $85", not just "something changed" | Row-level tracking |
-| AI batch summarization | One OpenAI call per batch (cost-efficient), better context | Per-change AI call — 10x cost |
-| Fingerprint dedup | Prevent anomaly notification spam | No dedup — causes 200+ duplicates |
-| Prisma for schema | Type-safe migrations, auto-generated types | Raw SQL migrations |
-| k3s | Production-grade orchestration, same APIs as full k8s | Docker Compose |
+```
+meta_test/
+  frontend/       Next.js app (UI, Prisma schema, API routes for local dev)
+  gateway/        Go API server (all production API endpoints, WebSocket, SNS)
+  ai-service/     Python FastAPI (OpenAI agents, anomaly detection, chat)
+  k8s/            Kubernetes deployment + ingress YAML
+```
