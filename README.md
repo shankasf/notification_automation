@@ -1,6 +1,6 @@
 # MetaSource — Intelligent Workforce Sourcing Platform
 
-A platform that helps sourcing managers track contractor hiring requests without any manual effort. When someone changes a hiring request — updates a bill rate, fills a position, changes status — the system instantly detects it, notifies the right manager, summarizes what happened using AI, and sends an email alert. All automatic.
+A platform that helps sourcing managers track contractor hiring requests without any manual effort. When admin edits a hiring request — updates a bill rate, fills a position, changes status — the system instantly detects it and notifies the relevant category manager. When a manager makes changes, admin gets notified. Both sides get real-time WebSocket push, AI-generated summaries, and email alerts. All automatic.
 
 **Live**: [https://meta.callsphere.tech](https://meta.callsphere.tech)
 
@@ -10,11 +10,11 @@ A platform that helps sourcing managers track contractor hiring requests without
 
 Five sourcing managers each own a category of hiring requests (engineering contractors, content & trust/safety, data operations, marketing/creative, corporate services). The platform:
 
-- **Detects every change** — field-level tracking captures exactly what changed, by whom, and when
-- **Routes to the right person** — each manager only sees updates for their category
+- **Detects every change** — field-level tracking captures exactly what changed, by whom (admin or manager), and when
+- **Routes notifications both ways** — admin edits notify the relevant manager; manager edits notify admin
 - **Updates dashboards in real time** — WebSocket push means counts and stats refresh instantly, no page reload needed
 - **Summarizes with AI** — instead of raw field diffs, managers get plain English summaries like "Bill rate for Senior DevOps increased from $75 to $95/hr"
-- **Sends email alerts** — every change triggers an email via AWS SNS
+- **Sends email alerts** — every change triggers an email to the other side via AWS SNS
 - **Flags problems automatically** — AI scans for anomalies like price spikes, budget overruns, and stale requests
 
 ### What Managers See
@@ -39,10 +39,10 @@ Five sourcing managers each own a category of hiring requests (engineering contr
 
 ## How It Works
 
-### The Change Flow (What Happens When Someone Edits a Request)
+### The Change Flow (What Happens When Admin or a Manager Edits a Request)
 
 ```
-User changes status from OPEN to COMPLETED
+Admin or manager changes status from OPEN to COMPLETED
     |
     v
 Go Gateway receives PUT /api/requisitions/:id
@@ -53,13 +53,13 @@ Go Gateway receives PUT /api/requisitions/:id
     |-- 4. Updates the requisition
     |
     Then fires 4 things in parallel:
-        |-- WebSocket broadcast to that manager + all admins (~50ms)
-        |-- Creates notification in database
+        |-- WebSocket broadcast to the category manager + admin (~50ms)
+        |-- Creates notification in database for the category manager
         |-- Sends email via AWS SNS (~1-2s)
         |-- Triggers AI anomaly check (~2-5s)
     |
     v
-Manager's browser receives WebSocket event
+The other side's browser receives WebSocket event
     |-- Dashboard refetches stats (counts drop because COMPLETED is excluded)
     |-- Home page refetches manager cards (same)
     |-- Toast notification appears
