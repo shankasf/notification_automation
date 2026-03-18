@@ -33,7 +33,7 @@ Five sourcing managers each own a category of hiring requests (engineering contr
 
 - **Admin** sees all 5 managers' data, can edit any category, access the data upload pipeline
 - **Managers** are auto-redirected to their own dashboard, can only edit their category's requests
-- Both get real-time updates — admin receives WebSocket events for all managers
+- **Notification routing is bidirectional** — when admin edits a request, the relevant category manager gets notified (WebSocket push, in-app notification, and email). When any manager edits a request, admin gets notified in real time via WebSocket. This applies across all 5 managers — every change triggers a notification to the other side
 
 ---
 
