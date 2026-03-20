@@ -659,3 +659,64 @@ flowchart LR
 | **Phase 3** | Move upload pipeline from synchronous gateway handler to Airflow DAG with S3 staging | Async uploads, stage-level progress, automatic retries |
 | **Phase 4** | Add market rate scraping DAG with freshness checks and DBT tests | Automated rate updates, stale data alerts |
 | **Phase 5** | Full data quality suite — DBT tests on all models, Airflow SLA monitoring, anomaly alerting | Data contracts enforced, pipeline health visible in Airflow UI |
+
+---
+
+## Glossary — Apache Airflow & DBT Terms
+
+### Apache Airflow
+
+| Term | Definition |
+|------|-----------|
+| **Airflow** | An open-source platform to programmatically author, schedule, and monitor workflows (data pipelines). Written in Python, originally created at Airbnb. |
+| **DAG (Directed Acyclic Graph)** | A collection of tasks organized with dependencies. "Directed" means tasks flow in one direction, "acyclic" means no circular loops — task A can depend on B, but B cannot depend back on A. Each pipeline is defined as one DAG. |
+| **Task** | A single unit of work within a DAG. For example, "extract new changes from PostgreSQL" or "call the AI summarization API." Tasks are the nodes in the graph. |
+| **Operator** | A template for a task that defines what it actually does. Airflow ships with built-in operators: `PythonOperator` (run a Python function), `BashOperator` (run a shell command), `PostgresOperator` (run a SQL query), `S3Sensor` (wait for a file in S3), etc. |
+| **Sensor** | A special type of operator that waits for an external condition to be met before proceeding. For example, an `S3KeySensor` waits until a file appears in an S3 bucket, then triggers the rest of the DAG. |
+| **DAG Run** | A single execution instance of a DAG. If a DAG is scheduled every 15 minutes, each 15-minute execution is one DAG run. Each run has a status: success, failed, or running. |
+| **Task Instance** | A specific run of a specific task. A DAG run contains one task instance per task defined in the DAG. Each task instance has its own status, logs, and retry count. |
+| **Scheduler** | The Airflow component that monitors all DAGs, triggers DAG runs on schedule, and submits tasks to the executor. It runs as a background process. |
+| **Executor** | The mechanism that actually runs tasks. `LocalExecutor` runs tasks as processes on the same machine. `CeleryExecutor` distributes tasks across multiple worker machines. `KubernetesExecutor` spins up a pod per task. |
+| **Worker** | A process or machine that executes tasks. With `CeleryExecutor`, workers pull tasks from a queue (Redis or RabbitMQ). With `KubernetesExecutor`, each worker is a temporary pod. |
+| **XCom (Cross-Communication)** | A mechanism for tasks to pass small pieces of data to each other. Task A can push a value (e.g., a row count), and Task B can pull it. Not meant for large data — use a database or S3 for that. |
+| **Hook** | A connection interface to external systems (PostgreSQL, S3, Slack, HTTP APIs). Hooks handle authentication and connection pooling. Operators use hooks internally. |
+| **Connection** | A stored credential in Airflow for accessing external systems. Managed via the Airflow UI or environment variables. Contains host, port, login, password, and extras. |
+| **Variable** | A key-value store in Airflow for configuration that may change between environments. For example, `s3_bucket_name = metasource-uploads-prod`. Accessible from any DAG. |
+| **Pool** | A way to limit the number of tasks running concurrently against a shared resource. For example, a pool of size 3 for the AI service ensures at most 3 summarization tasks run at once. |
+| **SLA (Service Level Agreement)** | A deadline for a task or DAG. If a task doesn't complete within its SLA window, Airflow sends an alert (email, Slack, etc.). Used to detect pipeline delays. |
+| **Backfill** | Running a DAG for past dates that were missed. If the pipeline was down for 2 hours, you backfill those 8 missed 15-minute runs. Airflow handles this with `airflow dags backfill`. |
+| **Retry** | Automatic re-execution of a failed task. Configured per task: `retries=3, retry_delay=timedelta(minutes=5)` means retry up to 3 times with 5-minute gaps. |
+| **Trigger Rule** | Defines when a task should run based on its upstream tasks' statuses. Default is `all_success` (all parents succeeded). Others: `one_success`, `all_failed`, `none_failed`, `all_done`. |
+| **Webserver** | The Airflow UI — a web application for monitoring DAGs, viewing task logs, triggering manual runs, and managing connections. Runs on port 8080 by default. |
+| **DAG Bag** | The collection of all DAG files Airflow knows about. The scheduler periodically scans the `dags/` folder and parses every Python file to discover DAGs. |
+| **Catchup** | When a DAG is created with a past `start_date`, Airflow will run it for every missed schedule interval by default. Set `catchup=False` to only run from now forward. |
+
+### DBT (Data Build Tool)
+
+| Term | Definition |
+|------|-----------|
+| **DBT** | An open-source command-line tool that enables data analysts and engineers to transform data in their warehouse using SQL SELECT statements. DBT handles the DDL/DML — you write the SELECT, DBT wraps it in CREATE TABLE or CREATE VIEW. |
+| **Model** | A single SQL SELECT statement saved as a `.sql` file. Each model produces one table or view in the database. Models can reference other models using `{{ ref('model_name') }}`. |
+| **ref()** | A Jinja function used in models to reference other models. `{{ ref('stg_requisitions') }}` resolves to the actual table name and tells DBT about the dependency, so it builds models in the right order. |
+| **source()** | A Jinja function to reference raw tables that DBT doesn't manage. `{{ source('meta_source', 'Requisition') }}` points to the existing PostgreSQL table. Sources are defined in a YAML file. |
+| **Materialization** | How DBT persists a model's results. Four types: **view** (CREATE VIEW — lightweight, always fresh, slower queries), **table** (CREATE TABLE — fast queries, rebuilt from scratch each run), **incremental** (INSERT only new/changed rows — fast for large tables), **ephemeral** (not persisted — inlined as CTE into downstream models). |
+| **Staging Model** | The first layer of transformation. One staging model per source table. Handles renaming columns, casting types, and light cleaning. Named with `stg_` prefix. Never contains business logic. |
+| **Intermediate Model** | The middle layer where business logic lives. Joins staging models, applies calculations, filters, and aggregations. Named with `int_` prefix. Not exposed to end users. |
+| **Mart Model** | The final layer — tables designed for direct consumption by APIs, dashboards, or analysts. Pre-aggregated, denormalized, and optimized for read performance. Named with `mart_` prefix. |
+| **dbt run** | The command that executes models. DBT reads the dependency graph, runs models in topological order, and materializes them in the database. `dbt run --select mart_dashboard_stats` runs only that model and its upstream dependencies. |
+| **dbt test** | Runs assertions against your data. Tests catch problems like null IDs, duplicate records, invalid enum values, or broken foreign keys. Failed tests can block downstream DAGs in Airflow. |
+| **Schema Test** | A built-in test defined in YAML. Four types: `not_null` (column has no NULLs), `unique` (no duplicate values), `accepted_values` (only allowed values like status enums), `relationships` (foreign key exists in the referenced table). |
+| **Custom Test (Data Test)** | A SQL query saved as a `.sql` file in the `tests/` folder. If the query returns any rows, the test fails. For example, a query that finds requisitions where `budgetSpent > budgetAllocated`. |
+| **Seed** | A CSV file in the `seeds/` folder that DBT loads into the database as a table. Useful for static reference data like category mappings, location codes, or rate thresholds. Loaded with `dbt seed`. |
+| **Snapshot** | Captures how a table changes over time using Slowly Changing Dimension Type 2 (SCD2). DBT adds `valid_from` and `valid_to` columns. Useful for tracking how requisition statuses or rates change historically. |
+| **Jinja** | The templating language used in DBT SQL files. Enables dynamic SQL: `{% if is_incremental() %}` filters to only new rows in incremental models. Also used for macros, loops, and conditional logic. |
+| **Macro** | A reusable Jinja function. For example, a macro `cents_to_dollars(column)` that wraps `{{ column }} / 100.0` can be called in any model. Stored in the `macros/` folder. |
+| **Profile** | A YAML file (`profiles.yml`) that tells DBT how to connect to the database. Contains host, port, database name, schema, and credentials. Supports multiple targets (dev, staging, prod). |
+| **Target** | An environment within a profile. `dbt run --target prod` uses production credentials and writes to the production schema. `dbt run --target dev` writes to a dev schema for safe testing. |
+| **dbt_project.yml** | The root configuration file for a DBT project. Defines project name, model paths, materialization defaults (e.g., all models in `marts/` are tables, all in `staging/` are views), and variable defaults. |
+| **Freshness** | A source-level check that verifies data is recent enough. Defined in YAML: `warn_after: {count: 1, period: hour}` alerts if the source table hasn't been updated in over an hour. Run with `dbt source freshness`. |
+| **Lineage Graph** | A visual dependency graph showing how models relate to each other — which sources feed which staging models, which staging models feed which marts. Viewable in dbt docs or dbt Cloud. Generated with `dbt docs generate`. |
+| **Incremental Model** | A model with `materialized='incremental'` that only processes new or changed rows instead of rebuilding the entire table. Uses an `{% if is_incremental() %}` block to filter rows added since the last run. Critical for large tables. |
+| **Ephemeral Model** | A model that isn't materialized as a table or view. Instead, its SQL is inlined as a Common Table Expression (CTE) into whatever model references it. Useful for small, reusable logic that doesn't need its own table. |
+| **Tag** | A label applied to models in YAML or config blocks. Enables selective execution: `dbt run --select tag:marts` runs only mart models. `dbt test --select tag:critical` runs only critical tests. |
+| **Selector** | A syntax for choosing which models to run. `dbt run --select stg_requisitions+` runs the model and everything downstream. `dbt run --select +mart_dashboard_stats` runs the model and everything upstream. The `+` operator follows the dependency graph. |
