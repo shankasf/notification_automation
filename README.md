@@ -346,3 +346,316 @@ meta_test/
   ai-service/     Python FastAPI (OpenAI agents, anomaly detection, chat)
   k8s/            Kubernetes deployment + ingress YAML
 ```
+
+---
+
+## Future: Data Pipeline with Apache Airflow & DBT
+
+The platform currently runs AI summarization every 15 minutes, anomaly detection on each change + daily, and data ingestion via admin-triggered uploads. As data volume grows and analytics requirements expand, a dedicated data pipeline using **Apache Airflow** (orchestration) and **DBT** (transformation) would replace these ad-hoc processes with scheduled, observable, testable pipelines.
+
+### Why Airflow + DBT
+
+| Current Approach | Problem at Scale | Airflow/DBT Solution |
+|-----------------|------------------|---------------------|
+| AI summarization runs on a 15-min cron in Python | No retry on failure, no visibility into backlog | Airflow DAG with retries, SLA alerts, backfill capability |
+| Anomaly detection triggered per-change + daily scan | Duplicate work, no dependency management | Airflow schedules detection after summarization completes |
+| CSV/Excel upload pipeline is synchronous in gateway | Blocks API, no progress tracking for large files | Airflow async pipeline with stage-level status |
+| Market rate scraping is manual | No scheduling, no staleness detection | Airflow DAG scrapes on schedule, DBT flags stale data |
+| Dashboard stats computed on every API call | Redundant computation, slow at scale | DBT pre-computes materialized views, Airflow refreshes them |
+| No data quality checks | Bad data discovered only when users complain | DBT tests enforce schema, uniqueness, freshness |
+
+### System Design — Airflow Orchestration Layer
+
+```mermaid
+flowchart TB
+    subgraph Sources["Data Sources"]
+        PG[(PostgreSQL<br/>meta_source)]
+        CSV[CSV / Excel<br/>Uploads]
+        SCRAPE[Market Rate<br/>Scrapers]
+        API_EXT[External APIs<br/>Vendor Systems]
+    end
+
+    subgraph Airflow["Apache Airflow (Orchestrator)"]
+        direction TB
+        SCHED[Airflow Scheduler]
+
+        subgraph DAGs["DAG Definitions"]
+            DAG1["📋 requisition_changes_pipeline<br/>⏰ Every 15 min"]
+            DAG2["🔍 anomaly_detection_pipeline<br/>⏰ Hourly"]
+            DAG3["📂 data_ingestion_pipeline<br/>⏰ Event-triggered"]
+            DAG4["📊 analytics_refresh_pipeline<br/>⏰ Every 30 min"]
+            DAG5["💰 market_rates_pipeline<br/>⏰ Daily at 6 AM"]
+            DAG6["🧹 data_quality_pipeline<br/>⏰ Daily at midnight"]
+        end
+
+        SCHED --> DAGs
+    end
+
+    subgraph DBT["DBT (Transform Layer)"]
+        direction TB
+        subgraph Staging["Staging Models"]
+            STG1[stg_requisitions]
+            STG2[stg_changes]
+            STG3[stg_notifications]
+            STG4[stg_market_rates]
+        end
+
+        subgraph Intermediate["Intermediate Models"]
+            INT1[int_change_summaries]
+            INT2[int_anomaly_scores]
+            INT3[int_rate_benchmarks]
+            INT4[int_manager_workload]
+        end
+
+        subgraph Marts["Mart Models (Materialized Views)"]
+            MART1[mart_dashboard_stats]
+            MART2[mart_manager_overview]
+            MART3[mart_budget_tracking]
+            MART4[mart_hiring_velocity]
+            MART5[mart_anomaly_report]
+        end
+
+        Staging --> Intermediate --> Marts
+    end
+
+    subgraph Consumers["Consumers"]
+        GW[Go Gateway API]
+        AI[AI Service]
+        DASH[Dashboard UI]
+        EMAIL[Email Alerts<br/>AWS SNS]
+    end
+
+    Sources --> Airflow
+    Airflow -->|"dbt run"| DBT
+    DBT -->|Materialized tables| PG
+    PG --> Consumers
+    Airflow -->|"Trigger on completion"| AI
+    Airflow -->|"Trigger on anomaly"| EMAIL
+```
+
+### DAG Design — Requisition Changes Pipeline
+
+This is the core pipeline that replaces the current 15-minute cron summarization and per-change anomaly detection.
+
+```mermaid
+flowchart LR
+    subgraph DAG["requisition_changes_pipeline — Runs every 15 min"]
+        direction LR
+        T1["extract_new_changes<br/>─────────────<br/>Query RequisitionChange<br/>where summary IS NULL"]
+        T2["dbt_run_staging<br/>─────────────<br/>dbt run --select<br/>stg_changes"]
+        T3["ai_generate_summaries<br/>─────────────<br/>Batch call AI Service<br/>for plain English summaries"]
+        T4["dbt_run_intermediate<br/>─────────────<br/>dbt run --select<br/>int_change_summaries<br/>int_anomaly_scores"]
+        T5["detect_anomalies<br/>─────────────<br/>Flag rate spikes >10%<br/>budget >90%, stale >30d"]
+        T6["notify_managers<br/>─────────────<br/>Create notifications<br/>+ WebSocket broadcast"]
+        T7["dbt_run_marts<br/>─────────────<br/>dbt run --select<br/>mart_dashboard_stats<br/>mart_anomaly_report"]
+        T8["refresh_websocket<br/>─────────────<br/>Push 'refresh' event<br/>to all connections"]
+
+        T1 --> T2 --> T3 --> T4 --> T5 --> T6 --> T7 --> T8
+    end
+```
+
+### DAG Design — Data Ingestion Pipeline
+
+Replaces the synchronous upload endpoint with an async, stage-tracked pipeline.
+
+```mermaid
+flowchart TB
+    subgraph DAG["data_ingestion_pipeline — Event-triggered by file upload"]
+        direction TB
+
+        UPLOAD["file_upload_sensor<br/>─────────────<br/>Watch S3 bucket for<br/>new CSV/Excel/JSON"]
+
+        subgraph Parse["Stage 1: Parse"]
+            P1["detect_format<br/>CSV / Excel / JSON / Text"]
+            P2["extract_records<br/>Programmatic for structured<br/>AI for unstructured"]
+        end
+
+        subgraph Clean["Stage 2: Clean (DBT)"]
+            C1["dbt run --select<br/>stg_raw_upload"]
+            C2["dbt run --select<br/>int_cleaned_upload<br/>─────────────<br/>Normalize categories<br/>Parse rates, dates<br/>Resolve vendors"]
+        end
+
+        subgraph Validate["Stage 3: Validate"]
+            V1["dbt test --select<br/>int_cleaned_upload<br/>─────────────<br/>not_null, unique,<br/>accepted_values,<br/>relationships"]
+            V2["quarantine_failures<br/>─────────────<br/>Move bad rows to<br/>quarantine table"]
+        end
+
+        subgraph Load["Stage 4: Load"]
+            L1["upsert_requisitions<br/>─────────────<br/>Insert/update with<br/>change tracking"]
+            L2["create_audit_records<br/>─────────────<br/>Log BULK_IMPORT<br/>changes"]
+            L3["trigger_notifications<br/>─────────────<br/>Notify managers of<br/>new/updated requests"]
+        end
+
+        UPLOAD --> Parse --> Clean --> Validate --> Load
+    end
+```
+
+### DAG Design — Analytics & Market Rates
+
+```mermaid
+flowchart LR
+    subgraph Analytics["analytics_refresh_pipeline — Every 30 min"]
+        direction LR
+        A1["dbt run --select<br/>mart_dashboard_stats<br/>mart_manager_overview<br/>mart_budget_tracking<br/>mart_hiring_velocity"]
+        A2["dbt test --select<br/>tag:marts"]
+        A3["websocket_refresh<br/>broadcast"]
+        A1 --> A2 --> A3
+    end
+
+    subgraph Market["market_rates_pipeline — Daily 6 AM"]
+        direction LR
+        M1["scrape_glassdoor<br/>scrape_levels_fyi<br/>scrape_indeed"]
+        M2["dbt run --select<br/>stg_market_rates"]
+        M3["dbt run --select<br/>int_rate_benchmarks"]
+        M4["dbt test<br/>freshness check"]
+        M5["flag_stale_rates<br/>alert if >7 days old"]
+        M1 --> M2 --> M3 --> M4 --> M5
+    end
+```
+
+### DBT Model Dependency Graph
+
+```mermaid
+flowchart TB
+    subgraph Sources["Source Tables (PostgreSQL)"]
+        S_REQ[source: Requisition]
+        S_CHG[source: RequisitionChange]
+        S_NOT[source: Notification]
+        S_MGR[source: SourcingManager]
+        S_MKT[source: MarketRate]
+        S_ANO[source: AnomalyFingerprint]
+    end
+
+    subgraph Staging["Staging Layer — Clean & type-cast"]
+        STG_REQ[stg_requisitions<br/>───<br/>Cast types, add<br/>is_active flag]
+        STG_CHG[stg_changes<br/>───<br/>Parse timestamps,<br/>classify change types]
+        STG_NOT[stg_notifications<br/>───<br/>Add read latency<br/>calculation]
+        STG_MKT[stg_market_rates<br/>───<br/>Normalize titles,<br/>deduplicate]
+    end
+
+    subgraph Intermediate["Intermediate Layer — Business logic"]
+        INT_SUM[int_change_summaries<br/>───<br/>Group changes by<br/>requisition + time window]
+        INT_ANO[int_anomaly_scores<br/>───<br/>Rate deviation from<br/>market, budget burn rate]
+        INT_BENCH[int_rate_benchmarks<br/>───<br/>Category/location<br/>percentiles]
+        INT_WORK[int_manager_workload<br/>───<br/>Open reqs, pending<br/>changes, alert count]
+        INT_VEL[int_hiring_velocity<br/>───<br/>Days per stage,<br/>fill rate trends]
+    end
+
+    subgraph Marts["Mart Layer — API-ready tables"]
+        MART_DASH[mart_dashboard_stats<br/>───<br/>Pre-computed stats<br/>for /api/stats]
+        MART_MGR[mart_manager_overview<br/>───<br/>Per-manager cards<br/>for home page]
+        MART_BUD[mart_budget_tracking<br/>───<br/>Budget utilization<br/>forecasts]
+        MART_HIRE[mart_hiring_velocity<br/>───<br/>Time-to-fill metrics<br/>by category]
+        MART_ANO[mart_anomaly_report<br/>───<br/>Active anomalies<br/>with severity ranking]
+    end
+
+    S_REQ --> STG_REQ
+    S_CHG --> STG_CHG
+    S_NOT --> STG_NOT
+    S_MKT --> STG_MKT
+    S_MGR --> INT_WORK
+
+    STG_REQ --> INT_SUM
+    STG_REQ --> INT_ANO
+    STG_REQ --> INT_WORK
+    STG_REQ --> INT_VEL
+    STG_CHG --> INT_SUM
+    STG_CHG --> INT_ANO
+    STG_MKT --> INT_BENCH
+
+    INT_SUM --> MART_DASH
+    INT_SUM --> MART_MGR
+    INT_ANO --> MART_ANO
+    INT_ANO --> MART_DASH
+    INT_BENCH --> MART_ANO
+    INT_WORK --> MART_MGR
+    INT_VEL --> MART_HIRE
+    INT_WORK --> MART_DASH
+    STG_NOT --> MART_MGR
+
+    S_ANO --> INT_ANO
+    INT_SUM --> MART_BUD
+    STG_REQ --> MART_BUD
+```
+
+### Proposed Project Structure
+
+```
+meta_test/
+  ...existing services...
+  data-pipeline/
+    dags/
+      requisition_changes.py      # 15-min change processing DAG
+      anomaly_detection.py        # Hourly anomaly scan DAG
+      data_ingestion.py           # Event-triggered upload DAG
+      analytics_refresh.py        # 30-min mart refresh DAG
+      market_rates.py             # Daily scraping DAG
+      data_quality.py             # Daily validation DAG
+    dbt/
+      models/
+        staging/
+          stg_requisitions.sql
+          stg_changes.sql
+          stg_notifications.sql
+          stg_market_rates.sql
+        intermediate/
+          int_change_summaries.sql
+          int_anomaly_scores.sql
+          int_rate_benchmarks.sql
+          int_manager_workload.sql
+          int_hiring_velocity.sql
+        marts/
+          mart_dashboard_stats.sql
+          mart_manager_overview.sql
+          mart_budget_tracking.sql
+          mart_hiring_velocity.sql
+          mart_anomaly_report.sql
+      tests/
+        assert_no_null_requisition_ids.sql
+        assert_valid_status_transitions.sql
+        assert_budget_not_negative.sql
+      dbt_project.yml
+      profiles.yml
+    docker-compose.airflow.yml    # Local Airflow dev environment
+    requirements.txt
+```
+
+### Integration with Existing Services
+
+```mermaid
+flowchart LR
+    subgraph Current["Current Architecture"]
+        FE[Next.js Frontend]
+        GW[Go Gateway]
+        AI[AI Service]
+        PG[(PostgreSQL)]
+    end
+
+    subgraph New["New Pipeline Layer"]
+        AF[Apache Airflow]
+        DBT[DBT]
+        S3[S3 Staging Bucket]
+    end
+
+    FE -->|"Upload file"| GW
+    GW -->|"Store raw file"| S3
+    S3 -->|"S3 sensor triggers"| AF
+    AF -->|"dbt run / dbt test"| DBT
+    DBT -->|"Read/write"| PG
+    AF -->|"Call /ai/summarize,<br/>/ai/analyze"| AI
+    AF -->|"POST /api/notifications<br/>+ WebSocket refresh"| GW
+    GW -->|"Read mart tables<br/>instead of live queries"| PG
+
+    style New fill:#f0f9ff,stroke:#0284c7
+    style Current fill:#f0fdf4,stroke:#16a34a
+```
+
+### Implementation Phases
+
+| Phase | Scope | Outcome |
+|-------|-------|---------|
+| **Phase 1** | Set up Airflow + DBT, migrate 15-min summarization cron to a DAG | Retries, alerting, and observability for existing process |
+| **Phase 2** | Add DBT staging + intermediate models, replace live `/api/stats` queries with mart tables | Dashboard loads from pre-computed tables — faster API responses |
+| **Phase 3** | Move upload pipeline from synchronous gateway handler to Airflow DAG with S3 staging | Async uploads, stage-level progress, automatic retries |
+| **Phase 4** | Add market rate scraping DAG with freshness checks and DBT tests | Automated rate updates, stale data alerts |
+| **Phase 5** | Full data quality suite — DBT tests on all models, Airflow SLA monitoring, anomaly alerting | Data contracts enforced, pipeline health visible in Airflow UI |
