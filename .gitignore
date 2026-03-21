@@ -33,8 +33,6 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Lock files (optional — keep package-lock if desired)
-frontend/package-lock.json
 
 # Claude config
 .claude/
