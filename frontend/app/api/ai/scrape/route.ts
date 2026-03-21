@@ -1,3 +1,12 @@
+/**
+ * POST /api/ai/scrape — triggers the AI-powered market rate scraping service.
+ *
+ * Proxies the request to the external AI service which collects current market
+ * bill rates from various sources (Glassdoor, LinkedIn Salary, etc.) and stores
+ * them in the MarketRate table for comparison against internal rates.
+ *
+ * Returns 502 if the scrape service is unavailable.
+ */
 import { NextResponse } from "next/server";
 
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || "http://localhost:8000";

@@ -1,3 +1,14 @@
+"""AI-powered change summarizer for hiring requisition updates.
+
+Takes a batch of RequisitionChange records for a single workforce category and
+produces a concise, manager-friendly natural-language summary using an LLM.
+The summary highlights the most impactful changes (rate shifts, headcount
+deltas, status transitions) in three sentences or fewer.
+
+Called by the /api/ai/summarize endpoint and the 15-minute background
+scheduler in main.py.
+"""
+
 import os
 import json
 import time

@@ -1,3 +1,9 @@
+// File: auto_analyze.go
+// Orchestrates automated analysis and email notification for requisition changes.
+// TriggerAnalysis enqueues an anomaly-detection request via SQS (processed by
+// the consumer in sqs_consumers.go). NotifyManagerEmail checks per-manager
+// notification rules before enqueuing an email, ensuring managers only receive
+// emails for change types they have opted into.
 package handlers
 
 import (
@@ -7,6 +13,8 @@ import (
 	"metasource-gateway/db"
 )
 
+// pythonBackend is the base URL for the Python AI service, used by scheduled
+// tasks and SQS consumers to call analysis, summarization, and email endpoints.
 var pythonBackend = os.Getenv("PYTHON_BACKEND")
 
 func init() {

@@ -1,3 +1,14 @@
+/**
+ * Dashboard page — displays KPI cards, charts, and recent changes for a
+ * sourcing manager (or aggregated admin view when no manager is selected).
+ *
+ * Shows: total hiring requests, unfilled positions, budget utilization,
+ * critical-priority count, a pie chart by category, a bar chart by status,
+ * and a timeline of recent change records.
+ *
+ * Subscribes to WebSocket events via useLiveUpdates() to silently refetch
+ * data when changes or notifications arrive (no loading flash).
+ */
 "use client";
 
 import { useEffect, useState, useCallback, Suspense } from "react";
@@ -55,6 +66,7 @@ interface Change {
   };
 }
 
+// Derive chart colors from the category config so they stay consistent with badges/avatars
 const CATEGORY_COLORS = Object.values(MANAGER_CONFIG).map((c) => c.color);
 
 const STATUS_BAR_COLORS: Record<string, string> = {
@@ -68,6 +80,7 @@ const STATUS_BAR_COLORS: Record<string, string> = {
   CANCELLED: "#EF4444",
 };
 
+/** Inner dashboard content — uses useSearchParams() so must be wrapped in Suspense. */
 function DashboardContent() {
   const searchParams = useSearchParams();
   const managerId = searchParams.get("manager");
@@ -343,6 +356,7 @@ function DashboardContent() {
   );
 }
 
+/** Suspense boundary wrapper — required because DashboardContent reads search params. */
 export default function DashboardPage() {
   return (
     <Suspense

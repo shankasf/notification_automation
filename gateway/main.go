@@ -1,3 +1,9 @@
+// File: main.go
+// Gateway entry point for the MetaSource hiring-request management platform.
+// This service acts as the API gateway: it connects to PostgreSQL, registers
+// all HTTP routes (public + authenticated), starts background SQS consumers
+// and scheduled tasks (summarization, anomaly scans), and handles graceful
+// shutdown of every subsystem in the correct order.
 package main
 
 import (

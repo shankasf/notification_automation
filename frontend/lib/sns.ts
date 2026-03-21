@@ -1,3 +1,14 @@
+/**
+ * AWS SNS integration for email notifications about requisition changes.
+ *
+ * Manages an SNS topic ("metasource-requisition-changes") and provides:
+ *  - ensureTopic(): creates the topic (idempotent) and caches its ARN
+ *  - subscribeAdminEmail(): subscribes an email (checks for duplicates first)
+ *  - publishChangeNotification(): sends a formatted change email to all subscribers
+ *
+ * SNS failures are logged but never thrown, so they don't block the main operation.
+ * Requires AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and AWS_REGION env vars.
+ */
 import {
   SNSClient,
   PublishCommand,
@@ -9,6 +20,7 @@ import {
 const TOPIC_NAME = "metasource-requisition-changes";
 const ADMIN_EMAIL = process.env.SNS_ADMIN_EMAIL || "";
 
+// Cache the topic ARN across requests to avoid repeated CreateTopic calls
 let cachedTopicArn: string | null = null;
 
 function getSNSClient() {

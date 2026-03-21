@@ -1,3 +1,12 @@
+// File: logging.go
+// Provides structured request/response logging middleware. Each request gets
+// a unique request ID (from the X-Request-ID header or auto-generated) that
+// is stored in the Gin context as both "request_id" and "correlation_id" for
+// use by downstream handlers and the audit middleware. Health check endpoints
+// are excluded to avoid log noise from load balancer probes.
+//
+// Log level is chosen based on response status: INFO for 2xx/3xx, WARN for
+// 4xx, ERROR for 5xx.
 package middleware
 
 import (
@@ -9,6 +18,8 @@ import (
 	"github.com/google/uuid"
 )
 
+// RequestLoggingMiddleware logs request start and completion with timing.
+// Skips health check paths to reduce noise.
 func RequestLoggingMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if strings.HasPrefix(c.Request.URL.Path, "/health") || strings.HasPrefix(c.Request.URL.Path, "/api/health") {
@@ -39,6 +50,7 @@ func RequestLoggingMiddleware() gin.HandlerFunc {
 		duration := time.Since(start)
 		status := c.Writer.Status()
 
+		// Select log level based on status code so errors are easy to filter
 		logFn := slog.Info
 		if status >= 500 {
 			logFn = slog.Error

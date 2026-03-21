@@ -1,3 +1,16 @@
+/**
+ * Requisitions API route — list and create hiring requests.
+ *
+ * GET /api/requisitions — paginated, sortable, filterable list. Supports:
+ *   - search: case-insensitive match against requisitionId, roleTitle, vendor, team, location
+ *   - category, status, priority: enum filters
+ *   - managerId: scopes to the manager's category
+ *   - sortBy/sortOrder: customizable sort column and direction
+ *
+ * POST /api/requisitions — creates a new requisition with auto-generated ID
+ *   (e.g., REQ-ENG-001). Computes budgetAllocated as billRate * headcount * 2080
+ *   (annual working hours). Also creates a CREATED change record for the audit trail.
+ */
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { prisma } from "@/lib/prisma";
@@ -73,7 +86,8 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json();
 
-    // Auto-generate requisitionId using the category short name (e.g. REQ-ENG-001)
+    // Auto-generate sequential requisitionId using category prefix (e.g., REQ-ENG-001).
+    // Finds the last used number for this category and increments by 1.
     const categoryShortName: Record<string, string> = {
       ENGINEERING_CONTRACTORS: "ENG",
       CONTENT_TRUST_SAFETY: "CTS",
@@ -96,6 +110,7 @@ export async function POST(request: NextRequest) {
 
     const requisitionId = `REQ-${shortName}-${String(nextNum).padStart(3, "0")}`;
 
+    // 2080 = 40 hrs/week * 52 weeks — annual FTE budget for contractor billing
     const budgetAllocated = body.billRateHourly * body.headcountNeeded * 2080;
 
     const requisition = await prisma.requisition.create({

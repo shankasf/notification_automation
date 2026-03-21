@@ -1,3 +1,14 @@
+"""Pydantic models and enums for the data-upload pipeline.
+
+Defines the validated schema that LLM-cleaned records must conform to
+(CleanedRequisition) before database insertion, plus a PipelineRecord model
+that tracks each record's progress through the parse -> clean -> validate ->
+upload stages.
+
+These enums mirror the Prisma schema enums in the Go gateway so that inserted
+rows pass database-level CHECK constraints.
+"""
+
 from pydantic import BaseModel, Field
 from typing import Optional
 from enum import Enum

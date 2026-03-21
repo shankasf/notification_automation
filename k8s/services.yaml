@@ -1,3 +1,19 @@
+# ============================================================
+# ClusterIP Services for MetaSource
+# ============================================================
+# Defines internal-only (ClusterIP) services for inter-pod
+# communication. The Go gateway deployment already exposes
+# port 8080 via the Ingress — no separate Service is needed
+# here because the Ingress references the gateway directly.
+#
+# - meta-frontend (port 3000): Next.js UI, serves pages and
+#   handles NextAuth OAuth callbacks
+# - meta-ai (port 8000): Python FastAPI AI service, called by
+#   the Go gateway for LLM queries, anomaly detection, etc.
+# ============================================================
+
+# -- Next.js Frontend Service --
+# Serves the UI and NextAuth API routes (/api/auth, /api/sns)
 apiVersion: v1
 kind: Service
 metadata:
@@ -12,6 +28,9 @@ spec:
       targetPort: 3000
       name: http
 ---
+# -- Python AI Service --
+# Internal-only service; the Go gateway proxies all /api/ai/*
+# requests to this service. Never exposed directly to the internet.
 apiVersion: v1
 kind: Service
 metadata:

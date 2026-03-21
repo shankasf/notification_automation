@@ -1,3 +1,15 @@
+// File: sqs_consumers.go
+// Implements the consumer side of the SQS message processing pipeline.
+// StartSQSConsumers launches one long-polling goroutine per queue:
+//   - analysis queue  (concurrency 1): calls the AI analyze endpoint, deduplicates
+//     anomalies, creates in-app notifications, and broadcasts via WebSocket.
+//   - email queue     (concurrency 3): forwards email payloads to the Python
+//     email service.
+//   - sns-publish queue (concurrency 2): publishes change events to SNS.
+//
+// PollQueue is the generic consumer loop: it long-polls SQS, dispatches messages
+// to a handler function with bounded concurrency via a semaphore, deletes
+// messages on success, and leaves them for retry/DLQ on failure.
 package handlers
 
 import (
@@ -35,10 +47,12 @@ func PollQueue(ctx context.Context, queueURL string, handler func(body string) e
 		default:
 		}
 
+		// 20-second long poll reduces empty-response API calls and costs.
+		// MaxNumberOfMessages is set to concurrency so we fill all worker slots per receive.
 		out, err := sqsClient.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
 			QueueUrl:            aws.String(queueURL),
 			MaxNumberOfMessages: int32(maxConcurrency),
-			WaitTimeSeconds:     20, // long polling
+			WaitTimeSeconds:     20,
 		})
 		if err != nil {
 			// Context cancellation is expected during shutdown
@@ -121,7 +135,8 @@ func processAnalysisMessage(body string) error {
 		return fmt.Errorf("decode analyze response for %s: %w", category, err)
 	}
 
-	// Collect critical/high anomalies
+	// Only critical and high severity anomalies warrant notifications;
+	// lower severities are logged by the AI service but not surfaced to managers.
 	var criticalAnomalies []map[string]interface{}
 	for _, a := range result.Anomalies {
 		if a.Severity == "critical" || a.Severity == "high" {
@@ -216,6 +231,8 @@ func processEmailMessage(body string) error {
 	}
 	defer resp.Body.Close()
 
+	// Only retry on server errors (5xx); 4xx means the payload is invalid
+	// and retrying won't help — let it succeed so the message is deleted.
 	if resp.StatusCode >= 500 {
 		return fmt.Errorf("email HTTP status %d for manager %s", resp.StatusCode, msg.ManagerID)
 	}

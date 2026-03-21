@@ -1,3 +1,17 @@
+/**
+ * Dashboard layout — shared shell for all authenticated pages (dashboard,
+ * requisitions, notifications, changes, market intel, chat, data upload).
+ *
+ * Provides:
+ *  - Responsive sidebar with navigation links and unread notification badge
+ *  - Top header bar with user identity, role badge, and notification bell
+ *  - WebSocket connection status indicator (Live / Connecting)
+ *  - LiveUpdatesProvider context so child pages can react to real-time events
+ *  - Toast container for in-app popup notifications
+ *
+ * This layout is reused by sibling route layouts (requisitions, notifications,
+ * etc.) which re-export it via `import DashboardLayout from "@/app/dashboard/layout"`.
+ */
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
@@ -35,6 +49,7 @@ interface ManagerInfo {
   category: string;
 }
 
+/** Core layout shell — sidebar, top bar, user info, notification badge. */
 function DashboardLayoutInner({ children }: { children: React.ReactNode }) {
   const { data: session } = useSession();
   const pathname = usePathname();
@@ -266,6 +281,7 @@ function DashboardLayoutInner({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** Wraps children in LiveUpdatesProvider, connecting the WS for the current manager. */
 function WSWrapper({ children }: { children: React.ReactNode }) {
   const searchParams = useSearchParams();
   const managerId = searchParams.get("manager");

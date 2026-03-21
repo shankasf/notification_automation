@@ -1,3 +1,15 @@
+/**
+ * RequisitionTable — data table powered by TanStack React Table for displaying
+ * hiring requests with inline editing.
+ *
+ * Features:
+ *  - Status column rendered as a dropdown (instant inline update)
+ *  - Priority badge is click-to-edit via a dropdown
+ *  - Bill rate is click-to-edit with an input field (Enter to save, Escape to cancel)
+ *  - Headcount shown as a filled/needed ratio with a progress bar
+ *  - Budget utilization progress bar with color thresholds (green/yellow/red)
+ *  - Row action menu: Edit (opens modal), View Change Log, Delete
+ */
 "use client";
 
 import { useState } from "react";
@@ -62,6 +74,7 @@ interface RequisitionTableProps {
   onInlineUpdate: (id: string, field: string, value: string | number) => void;
 }
 
+/** Data table with inline editing for status, priority, and bill rate columns. */
 export function RequisitionTable({ data, onEdit, onDelete, onInlineUpdate }: RequisitionTableProps) {
   const [editingCell, setEditingCell] = useState<{
     id: string;

@@ -1,3 +1,10 @@
+// File: ratelimit.go
+// Implements per-user (or per-IP for unauthenticated requests) rate limiting
+// using token-bucket rate limiters from golang.org/x/time/rate. Each user gets
+// a default requests-per-minute budget, with route-specific overrides for
+// expensive operations (e.g., AI chat calls, data uploads). Limiters are keyed
+// by user email (post-auth) or client IP (pre-auth). A background goroutine
+// evicts stale limiter entries every 5 minutes to prevent memory leaks.
 package middleware
 
 import (
@@ -10,6 +17,8 @@ import (
 	"golang.org/x/time/rate"
 )
 
+// limiterEntry pairs a token-bucket limiter with a timestamp so stale entries
+// can be garbage-collected by the cleanup goroutine.
 type limiterEntry struct {
 	limiter  *rate.Limiter
 	lastSeen time.Time
@@ -27,7 +36,8 @@ var routeLimits = map[string]int{
 }
 
 func init() {
-	// Cleanup stale limiters every 5 minutes
+	// Evict limiter entries that haven't been seen in 10 minutes to prevent
+	// unbounded memory growth from one-off visitors.
 	go func() {
 		for {
 			time.Sleep(5 * time.Minute)
@@ -42,6 +52,9 @@ func init() {
 	}()
 }
 
+// getLimiter returns the existing limiter for a key or creates a new one.
+// Burst size equals the RPM so that short bursts within a minute are allowed
+// as long as the average rate stays below the limit.
 func getLimiter(key string, rpm int) *rate.Limiter {
 	mu.Lock()
 	defer mu.Unlock()
@@ -49,7 +62,6 @@ func getLimiter(key string, rpm int) *rate.Limiter {
 		entry.lastSeen = time.Now()
 		return entry.limiter
 	}
-	// Convert requests-per-minute to a rate.Limit (per second) with burst = rpm
 	rps := rate.Limit(float64(rpm) / 60.0)
 	lim := rate.NewLimiter(rps, rpm)
 	limiters[key] = &limiterEntry{limiter: lim, lastSeen: time.Now()}

@@ -1,3 +1,11 @@
+/**
+ * GET /api/market-rates — returns market rate benchmarks, internal rate averages,
+ * and scrape log history for the Market Rates page.
+ *
+ * Optionally filtered by category. Internal rates are computed by grouping
+ * requisitions by role title + category and averaging their bill rates, which
+ * allows side-by-side comparison with external market data.
+ */
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { RequisitionCategory } from "@prisma/client";

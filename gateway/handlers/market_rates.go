@@ -1,3 +1,9 @@
+// File: market_rates.go
+// Provides GET /api/market-rates which returns three datasets in a single
+// response: external market rate benchmarks (from the MarketRate table),
+// internal rate averages (aggregated from live Requisition data), and recent
+// scrape logs showing the history of external data collection runs.
+// This powers the market rate comparison dashboard in the frontend.
 package handlers
 
 import (
@@ -9,6 +15,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// GetMarketRates returns market rates, internal rate averages, and scrape logs.
+// If managerId is provided without a category, the manager's category is resolved
+// automatically so the response is scoped to their domain.
 func GetMarketRates(c *gin.Context) {
 	managerID := c.Query("managerId")
 	category := c.Query("category")
@@ -55,7 +64,8 @@ func GetMarketRates(c *gin.Context) {
 		})
 	}
 
-	// Internal rate averages
+	// Internal rate averages — aggregated from live requisition data so managers
+	// can compare their actual bill rates against external benchmarks
 	intQuery := `SELECT "roleTitle", category, AVG("billRateHourly") as avg_rate, COUNT(*) as count
 		FROM "Requisition" ` + whereClause + `
 		GROUP BY "roleTitle", category
@@ -76,7 +86,7 @@ func GetMarketRates(c *gin.Context) {
 		}
 	}
 
-	// Scrape logs
+	// Scrape logs — last 20 runs of the external rate-scraping jobs for audit/debugging
 	logRows, _ := db.DB.Query(`
 		SELECT id, source, "rolesScraped", status, duration, error, "createdAt"
 		FROM "ScrapeLog" ORDER BY "createdAt" DESC LIMIT 20

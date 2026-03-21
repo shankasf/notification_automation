@@ -1,3 +1,13 @@
+"""AI-powered data cleaning agent for the upload pipeline.
+
+Takes raw, messy hiring records extracted by the parser and normalizes them
+using an LLM: fixing typos, mapping short-hand category names to their enum
+values, converting rates/dates to standard formats, and back-filling defaults.
+
+Records are processed in parallel batches (default 10 per LLM call) to stay
+within token limits while maximizing throughput.
+"""
+
 import os
 import json
 import time
@@ -108,7 +118,8 @@ async def clean_records(records: list[dict]) -> list[dict]:
     tasks = [clean_batch(batch, i) for i, batch in enumerate(batches)]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    # Flatten results
+    # Flatten results, preserving index alignment: if a batch failed,
+    # insert empty dicts so downstream code can map by position
     all_cleaned = []
     for i, result in enumerate(results):
         if isinstance(result, Exception):
@@ -116,7 +127,6 @@ async def clean_records(records: list[dict]) -> list[dict]:
                 "batch_exception",
                 extra={"extra_data": {"batch_index": i, "error": str(result)}},
             )
-            # Return empty dicts for failed batch so indices stay aligned
             all_cleaned.extend([{}] * len(batches[i]))
         else:
             all_cleaned.extend(result)

@@ -1,3 +1,8 @@
+// File: changes.go
+// Provides the GET /api/changes endpoint for listing requisition change history.
+// Changes are stored in the RequisitionChange table and joined with Requisition
+// to provide context (role title, category). Supports filtering by manager,
+// requisition, change type, and date range with cursor-free offset pagination.
 package handlers
 
 import (
@@ -12,6 +17,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// ListChanges returns a paginated list of requisition changes with optional filters.
+// When managerId is supplied, it scopes results to that manager's category by
+// looking up the SourcingManager record — this prevents managers from seeing
+// changes outside their responsibility.
 func ListChanges(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "25"))
@@ -53,6 +62,7 @@ func ListChanges(c *gin.Context) {
 		argIdx++
 	}
 	if managerID != "" {
+		// Resolve manager's category so we can scope changes to their domain
 		var cat string
 		db.DB.QueryRow(`SELECT category FROM "SourcingManager" WHERE id = $1`, managerID).Scan(&cat)
 		if cat != "" {
@@ -126,6 +136,7 @@ func ListChanges(c *gin.Context) {
 		})
 	}
 
+	// Ceiling division to calculate the total number of pages
 	totalPages := (total + pageSize - 1) / pageSize
 	c.JSON(http.StatusOK, gin.H{
 		"changes":    changes,

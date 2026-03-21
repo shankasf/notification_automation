@@ -1,3 +1,4 @@
+/** Reusable DropdownMenu component (shadcn/ui) — built on Radix UI Dropdown Menu primitive. */
 "use client";
 
 import * as React from "react";

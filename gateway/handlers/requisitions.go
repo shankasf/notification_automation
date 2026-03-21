@@ -1,3 +1,13 @@
+// File: requisitions.go
+// Core CRUD handlers for the Requisition resource (hiring requests). This is
+// the central data entity in MetaSource. Each mutation (create/update/delete)
+// records a RequisitionChange for audit, broadcasts via WebSocket for real-time
+// UI updates, creates in-app notifications for the responsible manager, sends
+// email notifications (if the manager's NotificationRule allows it), and
+// publishes an SNS event for external subscribers.
+//
+// Role-based access control is enforced: admins can access all requisitions,
+// managers are restricted to their own category.
 package handlers
 
 import (
@@ -15,6 +25,8 @@ import (
 	"github.com/google/uuid"
 )
 
+// ListRequisitions returns a paginated, filterable, sortable list of requisitions.
+// Managers are automatically scoped to their category via the JWT-derived manager_id.
 func ListRequisitions(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "25"))
@@ -85,7 +97,7 @@ func ListRequisitions(c *gin.Context) {
 		where = "WHERE " + strings.Join(conditions, " AND ")
 	}
 
-	// Sort whitelist
+	// Whitelist of allowed sort expressions to prevent SQL injection via the sort param
 	orderBy := `"updatedAt" DESC`
 	sortMap := map[string]string{
 		"updatedAt_desc":     `"updatedAt" DESC`,
@@ -167,6 +179,7 @@ func ListRequisitions(c *gin.Context) {
 	})
 }
 
+// GetRequisition returns a single requisition by its UUID primary key.
 func GetRequisition(c *gin.Context) {
 	paramID := c.Param("id")
 
@@ -208,6 +221,7 @@ func GetRequisition(c *gin.Context) {
 	})
 }
 
+// CreateReqBody defines the required and optional fields for creating a new requisition.
 type CreateReqBody struct {
 	Team            string  `json:"team" binding:"required"`
 	Department      string  `json:"department" binding:"required"`
@@ -258,6 +272,8 @@ func checkManagerAuth(c *gin.Context, reqCategory string) bool {
 	return true
 }
 
+// CreateRequisition inserts a new requisition, generates a sequential REQ-XXX-NNN ID,
+// records a CREATED change, notifies the responsible manager, and publishes to SNS.
 func CreateRequisition(c *gin.Context) {
 	var body CreateReqBody
 	if err := c.ShouldBindJSON(&body); err != nil {
@@ -276,11 +292,13 @@ func CreateRequisition(c *gin.Context) {
 	if body.Priority == "" {
 		body.Priority = "MEDIUM"
 	}
+	// Auto-calculate budget if not explicitly provided: rate * headcount * 2080 work hours/year
 	if body.BudgetAllocated == 0 {
 		body.BudgetAllocated = body.BillRateHourly * float64(body.HeadcountNeeded) * 2080
 	}
 
-	// Generate requisition ID
+	// Generate a human-readable requisition ID like REQ-ENG-042 by finding the
+	// max sequence number for this category and incrementing it.
 	abbrevMap := map[string]string{
 		"ENGINEERING_CONTRACTORS": "ENG", "CONTENT_TRUST_SAFETY": "CTS",
 		"DATA_OPERATIONS": "DOP", "MARKETING_CREATIVE": "MKT", "CORPORATE_SERVICES": "COR",
@@ -367,6 +385,8 @@ func CreateRequisition(c *gin.Context) {
 	})
 }
 
+// UpdateReqBody uses pointer fields so we can distinguish between "not provided"
+// (nil) and "set to zero value" — only non-nil fields trigger an UPDATE SET clause.
 type UpdateReqBody struct {
 	Status          *string  `json:"status"`
 	Priority        *string  `json:"priority"`
@@ -380,6 +400,8 @@ type UpdateReqBody struct {
 	Notes           *string  `json:"notes"`
 }
 
+// UpdateRequisition applies partial updates to a requisition, tracking each
+// field change as a separate RequisitionChange record with old/new values.
 func UpdateRequisition(c *gin.Context) {
 	id := c.Param("id")
 
@@ -425,6 +447,7 @@ func UpdateRequisition(c *gin.Context) {
 	argIdx := 1
 	changes := []gin.H{}
 
+	// track inserts a RequisitionChange row for each field that actually changed
 	track := func(field, changeType, oldVal, newVal string) {
 		if oldVal != newVal {
 			chID := uuid.New().String()
@@ -569,6 +592,8 @@ func UpdateRequisition(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"updated": true, "changes": len(changes)})
 }
 
+// DeleteRequisition removes a requisition and notifies the responsible manager
+// via WebSocket, in-app notification, email, and SNS.
 func DeleteRequisition(c *gin.Context) {
 	id := c.Param("id")
 	changedBy := getChangedBy(c)

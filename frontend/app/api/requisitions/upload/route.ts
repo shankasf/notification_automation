@@ -1,7 +1,21 @@
+/**
+ * POST /api/requisitions/upload — bulk CSV import endpoint for hiring requests.
+ *
+ * Accepts a multipart form upload with a CSV file. For each row:
+ *  1. Normalizes column headers via COLUMN_ALIASES (e.g., "role_title" -> "roleTitle")
+ *  2. Resolves category from fuzzy input via CATEGORY_MAP (e.g., "eng" -> "ENGINEERING_CONTRACTORS")
+ *  3. If a requisitionId exists in the CSV and matches an existing record, updates it
+ *  4. Otherwise, auto-generates a new sequential ID and creates the record
+ *  5. Creates BULK_IMPORT change records for audit trail
+ *  6. Sends CHANGE_SUMMARY notifications to affected managers
+ *
+ * Returns { created, updated, errors[], total } summary.
+ */
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import Papa from "papaparse";
 
+// Fuzzy mapping from various user-typed category names to canonical enum values
 const CATEGORY_MAP: Record<string, string> = {
   engineering: "ENGINEERING_CONTRACTORS",
   "engineering contractors": "ENGINEERING_CONTRACTORS",
@@ -32,6 +46,7 @@ const CATEGORY_SHORT_NAME: Record<string, string> = {
   CORPORATE_SERVICES: "COR",
 };
 
+// Maps common CSV column header variations to canonical field names
 const COLUMN_ALIASES: Record<string, string> = {
   "role": "roleTitle",
   "role_title": "roleTitle",

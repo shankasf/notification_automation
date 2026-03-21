@@ -1,3 +1,8 @@
+// File: stats.go
+// Provides GET /api/stats which returns aggregated dashboard statistics:
+// total active requisitions, headcount gap, budget allocation vs spend,
+// critical-priority count, and breakdowns by category and status.
+// When managerId is provided, results are scoped to that manager's category.
 package handlers
 
 import (
@@ -8,6 +13,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// GetStats computes and returns dashboard-level statistics. Uses two separate
+// WHERE clause strategies: "active" (excludes COMPLETED/CANCELLED) for headline
+// KPIs, and "all" (includes every status) for the status distribution chart.
 func GetStats(c *gin.Context) {
 	managerID := c.Query("managerId")
 

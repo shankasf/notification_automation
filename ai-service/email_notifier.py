@@ -1,4 +1,13 @@
-"""Email notification sender using AWS SES SMTP."""
+"""Email notification sender using AWS SES SMTP.
+
+Sends styled HTML emails to sourcing managers for change summaries, anomaly
+alerts, budget warnings, and milestones. Emails include both a plain-text
+fallback and an HTML body with a branded template pointing to the dashboard.
+
+SMTP credentials are read from environment variables. If not configured, email
+sends are silently skipped (logged as a warning) so the rest of the system
+continues to function in development environments.
+"""
 
 import html
 import os
@@ -54,15 +63,17 @@ def send_notification_email(to_email: str, manager_name: str, subject: str, body
     )
     start = time.time()
 
+    # Color-code the notification badge by type for visual distinction
     type_colors = {
-        "CHANGE_SUMMARY": "#3B82F6",
-        "ANOMALY_ALERT": "#EF4444",
-        "BUDGET_WARNING": "#F59E0B",
-        "MILESTONE": "#10B981",
+        "CHANGE_SUMMARY": "#3B82F6",   # blue
+        "ANOMALY_ALERT": "#EF4444",    # red
+        "BUDGET_WARNING": "#F59E0B",   # amber
+        "MILESTONE": "#10B981",        # green
     }
     color = type_colors.get(notif_type, "#6B7280")
     type_label = notif_type.replace("_", " ").title()
 
+    # HTML-escape all user-supplied content to prevent XSS in email clients
     safe_name = html.escape(manager_name)
     safe_subject = html.escape(subject)
     safe_body = html.escape(body_text)
@@ -134,7 +145,8 @@ def send_notification_email(to_email: str, manager_name: str, subject: str, body
 
 
 def send_manager_notification(manager_id: str, subject: str, body: str, notif_type: str = "CHANGE_SUMMARY"):
-    """Look up manager email from DB and send notification."""
+    """Look up the manager's name and email from the SourcingManager table,
+    then delegate to send_notification_email. Returns True on success."""
     logger.info(
         "send_manager_notification",
         extra={

@@ -1,3 +1,17 @@
+/**
+ * useWebSocket — React hook for maintaining a persistent WebSocket connection
+ * to the Go notification service (/ws/notifications).
+ *
+ * Features:
+ *  - Auto-reconnects with exponential backoff (1s, 2s, 4s, ... up to 30s)
+ *  - Resets retry counter on successful connection
+ *  - Uses a ref for the onMessage callback to avoid re-creating the WS on handler changes
+ *  - Cleans up properly on unmount (prevents reconnect during cleanup)
+ *  - Exposes `connected` state for UI indicators
+ *
+ * The managerId parameter scopes the WS to a specific manager's events,
+ * or "admin" for all events. Pass "__disabled__" to prevent connection.
+ */
 "use client";
 
 import { useEffect, useRef, useCallback, useState } from "react";
@@ -13,6 +27,7 @@ interface UseWebSocketOptions {
   onMessage?: (msg: WSMessage) => void;
 }
 
+/** Establishes and maintains a WebSocket connection with auto-reconnect. */
 export function useWebSocket({ managerId, onMessage }: UseWebSocketOptions) {
   const [connected, setConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);

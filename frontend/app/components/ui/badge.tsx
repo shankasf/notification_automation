@@ -1,3 +1,4 @@
+/** Reusable Badge component (shadcn/ui) — renders a small pill-shaped label with color variants. */
 import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";

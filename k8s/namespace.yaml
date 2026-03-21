@@ -1,3 +1,11 @@
+# ============================================================
+# Namespace: meta-test
+# ============================================================
+# Creates an isolated Kubernetes namespace for all MetaSource
+# resources (deployments, services, secrets, ingress).
+# Keeps this project's resources separated from other workloads
+# on the shared k3s cluster.
+# ============================================================
 apiVersion: v1
 kind: Namespace
 metadata:

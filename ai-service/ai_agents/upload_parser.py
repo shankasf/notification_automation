@@ -1,3 +1,16 @@
+"""Multi-format file parser for the data-upload pipeline.
+
+Handles four input formats:
+- CSV/TSV: parsed with Python's csv.DictReader
+- JSON/JSONL: parsed with json.loads, auto-detecting nested arrays
+- Excel (xlsx/xls): parsed with openpyxl using the first sheet
+- Unstructured text: dispatched to an LLM extraction agent as a fallback
+
+The LLM parser agent is only used when the file format cannot be parsed
+deterministically. It extracts hiring/staffing records from free-form text
+and returns them as a JSON array.
+"""
+
 import csv
 import json
 import io
@@ -43,15 +56,17 @@ def parse_csv(content: str) -> list[dict]:
 
 
 def parse_json(content: str) -> list[dict]:
-    """Parse JSON content — handles array or single object."""
+    """Parse JSON content -- handles a bare array, a single object, or an
+    object with a well-known nested array key (data, records, items, etc.)."""
     data = json.loads(content)
     if isinstance(data, list):
         return data
     if isinstance(data, dict):
-        # Check if it has a nested array
+        # Look for a nested array under common wrapper keys
         for key in ("data", "records", "items", "requisitions", "rows"):
             if key in data and isinstance(data[key], list):
                 return data[key]
+        # Single-object payload -- wrap it
         return [data]
     return []
 
@@ -86,14 +101,15 @@ def parse_excel(content: bytes) -> list[dict]:
 
 
 async def parse_unstructured(content: str) -> list[dict]:
-    """Use LLM to extract records from unstructured text."""
+    """Use the LLM parser agent to extract structured hiring records from
+    free-form text (e.g., emails, PDFs-converted-to-text, Slack pastes)."""
     logger.info(
         "llm_parse_started",
         extra={"extra_data": {"content_length": len(content)}},
     )
     start = time.time()
 
-    # Truncate if too long
+    # Truncate to 8 KB to stay within LLM context limits
     truncated = content[:8000] if len(content) > 8000 else content
     prompt = f"Extract hiring/staffing records from this data:\n\n{truncated}"
 
@@ -141,7 +157,8 @@ async def parse_file(
     elif file_type in ("xlsx", "xls") and raw_bytes:
         records = parse_excel(raw_bytes)
     elif file_type in ("xlsx", "xls"):
-        # If only text content was sent, try to parse as CSV (Excel copy-paste)
+        # No raw bytes available -- the gateway may have sent copy-pasted text.
+        # Try CSV first (comma-separated); fall back to LLM extraction.
         records = (
             parse_csv(content) if "," in content else await parse_unstructured(content)
         )

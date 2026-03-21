@@ -1,3 +1,13 @@
+// File: sqs.go
+// Manages the AWS SQS client, queue creation, and producer functions.
+// The gateway uses three SQS queues for reliable asynchronous processing:
+//   - metasource-analysis.fifo   — AI anomaly detection (FIFO per category)
+//   - metasource-email           — email notification delivery (standard)
+//   - metasource-sns-publish     — SNS change event publishing (standard)
+//
+// Each main queue has a paired Dead Letter Queue (DLQ) with maxReceiveCount=3.
+// All queue creation is idempotent (CreateQueue returns existing queue if it
+// already exists). The consumer side lives in sqs_consumers.go.
 package handlers
 
 import (
@@ -21,10 +31,12 @@ var (
 	sqsOnce    sync.Once
 	sqsInitErr error
 
+	// Main queue URLs — populated by createQueues()
 	analysisQueueURL   string // metasource-analysis.fifo
 	emailQueueURL      string // metasource-email
 	snsPublishQueueURL string // metasource-sns-publish
 
+	// DLQ URLs — used by GetQueueDepths() for monitoring
 	analysisDLQURL   string // metasource-analysis-dlq.fifo
 	emailDLQURL      string // metasource-email-dlq
 	snsPublishDLQURL string // metasource-sns-publish-dlq

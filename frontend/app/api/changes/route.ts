@@ -1,3 +1,15 @@
+/**
+ * GET /api/changes — returns a paginated, filterable list of requisition change records.
+ *
+ * Supports filtering by:
+ *  - requisitionId: changes for a specific requisition
+ *  - changeType: CREATED, UPDATED, STATUS_CHANGE, RATE_CHANGE, etc.
+ *  - managerId: scoped to the manager's category
+ *  - dateFrom/dateTo: date range filter
+ *
+ * Each change record includes the related requisition's ID, role title, and category.
+ * Results are sorted by createdAt desc by default.
+ */
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { Prisma, ChangeType } from "@prisma/client";

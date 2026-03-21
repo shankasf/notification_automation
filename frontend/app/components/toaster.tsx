@@ -1,3 +1,14 @@
+/**
+ * Toaster — global toast notification system.
+ *
+ * Exposes a `showToast(title, description)` function that can be called from
+ * anywhere (not just React components) to display a popup notification. This
+ * works by storing the add-toast callback in a module-level variable that the
+ * Toaster component sets on mount.
+ *
+ * Used by the dashboard layout to surface WebSocket-driven notifications
+ * (e.g., "Request Updated", "New Notification") as transient toasts.
+ */
 "use client";
 
 import { useState, useCallback } from "react";
@@ -16,8 +27,10 @@ interface ToastItem {
   description: string;
 }
 
+// Module-level ref so showToast() can be called from outside React tree
 let _addToast: ((title: string, description: string) => void) | null = null;
 
+/** Imperatively show a toast from anywhere — requires <Toaster /> to be mounted. */
 export function showToast(title: string, description: string) {
   _addToast?.(title, description);
 }

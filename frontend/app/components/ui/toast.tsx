@@ -1,3 +1,4 @@
+/** Reusable Toast notification primitives (shadcn/ui) — built on Radix UI Toast. */
 "use client";
 
 import * as React from "react";

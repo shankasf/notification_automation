@@ -1,3 +1,4 @@
+/** Reusable Dialog (modal) component (shadcn/ui) — built on Radix UI Dialog primitive. */
 "use client";
 
 import * as React from "react";

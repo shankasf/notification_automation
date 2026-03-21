@@ -1,4 +1,15 @@
-"""Prompt injection defense and banned topic detection."""
+"""Prompt injection defense and banned topic detection.
+
+Provides two layers of input filtering:
+
+1. **Prompt injection** -- Regex patterns that catch common jailbreak attempts
+   (e.g., "ignore previous instructions", "you are now a", "DAN mode"). Any
+   match causes the message to be rejected outright.
+
+2. **Banned cross-category topics** -- Prevents non-admin managers from
+   requesting sensitive financial data across categories (e.g., "show all
+   vendor pricing"). Admin users (no category set) are exempt.
+"""
 
 import re
 
@@ -7,7 +18,8 @@ from logging_config import get_logger
 logger = get_logger("guardrails.prompt")
 
 # ── Prompt injection patterns ────────────────────────────────────────────
-
+# Case-insensitive regexes covering known jailbreak/override phrasings.
+# Compiled once at import time for performance.
 INJECTION_PATTERNS = [
     r"(?i)ignore\s+(all\s+)?previous\s+instructions",
     r"(?i)forget\s+(your\s+)?(system\s+)?prompt",
@@ -25,7 +37,8 @@ INJECTION_PATTERNS = [
 _compiled_injection = [re.compile(p) for p in INJECTION_PATTERNS]
 
 # ── Banned cross-category data requests ──────────────────────────────────
-
+# Patterns that indicate a manager is trying to access data outside their
+# own category. Only enforced for non-admin users.
 BANNED_CROSS_CATEGORY_PATTERNS = [
     r"(?i)show\s+(me\s+)?all\s+(vendor|contract|pricing)",
     r"(?i)(every|all)\s+manager.*(data|rate|budget|contract)",

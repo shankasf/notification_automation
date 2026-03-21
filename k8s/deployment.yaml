@@ -1,4 +1,21 @@
-# Frontend (Next.js)
+# ============================================================
+# Deployments for MetaSource (3 microservices)
+# ============================================================
+# All three services run in the meta-test namespace on k3s.
+# Source code is mounted from the host via hostPath volumes
+# (dev setup — in production, use container images instead).
+#
+# Services:
+#   1. meta-frontend  — Next.js 15 UI (port 3000)
+#   2. meta-gateway   — Go/Gin API gateway (port 8080)
+#   3. meta-ai        — Python FastAPI AI service (port 8000)
+# ============================================================
+
+# ---- 1. Frontend (Next.js 15) ----
+# Serves the dashboard UI, handles Google OAuth via NextAuth,
+# and manages the Prisma schema/migrations for PostgreSQL.
+# The initContainer runs DB migrations before the app starts
+# to ensure the schema is up to date on every deploy.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -16,6 +33,8 @@ spec:
       labels:
         app: meta-frontend
     spec:
+      # Run database migrations before starting the app
+      # This ensures schema is always in sync with code
       initContainers:
         - name: run-migrations
           image: node:20-bookworm
@@ -43,6 +62,7 @@ spec:
           image: node:20-bookworm
           imagePullPolicy: IfNotPresent
           workingDir: /app
+          # Builds and starts Next.js in production mode
           command: ["sh", "-c", "npm install --include=dev --ignore-scripts && npx prisma generate && npm run build && npm run start"]
           ports:
             - containerPort: 3000
@@ -50,9 +70,9 @@ spec:
             - name: NODE_ENV
               value: "production"
             - name: NODE_OPTIONS
-              value: "--max-old-space-size=1024"
+              value: "--max-old-space-size=1024"   # Prevent OOM during Next.js build
             - name: NEXT_TELEMETRY_DISABLED
-              value: "1"
+              value: "1"                            # Opt out of Vercel telemetry
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -64,7 +84,7 @@ spec:
                   name: auth-secret
                   key: NEXTAUTH_SECRET
             - name: AI_SERVICE_URL
-              value: "http://meta-ai:8000"
+              value: "http://meta-ai:8000"         # Internal K8s DNS for AI service
             - name: OPENAI_API_KEY
               valueFrom:
                 secretKeyRef:
@@ -89,7 +109,7 @@ spec:
               memory: "512Mi"
               cpu: "100m"
             limits:
-              memory: "1.5Gi"
+              memory: "1.5Gi"              # Next.js build is memory-hungry
               cpu: "500m"
           volumeMounts:
             - name: frontend-source
@@ -97,10 +117,14 @@ spec:
       volumes:
         - name: frontend-source
           hostPath:
-            path: /home/ubuntu/apps/meta_test/frontend
+            path: /home/ubuntu/apps/meta_test/frontend   # Dev: mount source from host
             type: Directory
 ---
-# Gateway (Go/Gin)
+# ---- 2. Gateway (Go/Gin) ----
+# Central API server handling all REST endpoints, WebSocket hub,
+# SQS queue producers/consumers, change tracking, and notification routing.
+# Connects to PostgreSQL directly (raw SQL) and proxies AI requests
+# to the Python service. Lightweight — only needs 128Mi base memory.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -123,6 +147,7 @@ spec:
           image: debian:bookworm-slim
           imagePullPolicy: IfNotPresent
           workingDir: /app
+          # Install CA certs for HTTPS calls to AWS services, then run the compiled Go binary
           command: ["sh", "-c", "apt-get update && apt-get install -y ca-certificates && update-ca-certificates && ./server"]
           ports:
             - containerPort: 8080
@@ -130,7 +155,7 @@ spec:
             - name: PORT
               value: "8080"
             - name: PYTHON_BACKEND
-              value: "http://meta-ai:8000"
+              value: "http://meta-ai:8000"        # Internal K8s DNS for AI service
             - name: DB_HOST
               valueFrom:
                 secretKeyRef:
@@ -191,7 +216,11 @@ spec:
             path: /home/ubuntu/apps/meta_test/gateway
             type: Directory
 ---
-# AI Service (Python FastAPI)
+# ---- 3. AI Service (Python FastAPI) ----
+# Handles all AI/ML operations: LLM chat (GPT-4.1), anomaly detection,
+# change summarization, data upload pipeline, and guardrails enforcement.
+# Internal-only — never exposed to the internet directly. The Go gateway
+# proxies all /api/ai/* requests here with JWT header forwarding.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -214,6 +243,7 @@ spec:
           image: python:3.11-slim
           imagePullPolicy: IfNotPresent
           workingDir: /app
+          # Install Python deps and start FastAPI with hot-reload (dev mode)
           command: ["sh", "-c", "pip install -r requirements.txt && uvicorn main:app --host 0.0.0.0 --port 8000 --reload"]
           ports:
             - containerPort: 8000

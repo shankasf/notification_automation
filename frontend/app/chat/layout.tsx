@@ -1,3 +1,4 @@
+/** Chat layout — reuses the shared dashboard shell (sidebar + header). */
 import DashboardLayout from "@/app/dashboard/layout";
 
 export default function ChatLayout({

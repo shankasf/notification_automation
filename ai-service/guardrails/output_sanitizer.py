@@ -1,4 +1,18 @@
-"""LLM output sanitization — strips dangerous content and enforces scope."""
+"""LLM output sanitization -- strips dangerous content and enforces scope.
+
+This is an *output* guardrail applied after the LLM generates a response but
+before it is returned to the user. Two concerns are addressed:
+
+1. **Sanitization** -- Removes script tags, HTML event handlers, and SQL
+   injection patterns that a compromised or confused LLM might produce.
+   Markdown formatting is preserved since it is safe for frontend rendering.
+
+2. **Scope validation** -- For non-admin users (managers), checks each line
+   of the response for references to *other* categories that also contain
+   sensitive financial data (bill rates, budgets). Matching lines are
+   replaced with a redaction notice so managers cannot see data outside
+   their own category.
+"""
 
 import re
 import hashlib
@@ -7,10 +21,11 @@ from logging_config import get_logger
 
 logger = get_logger("guardrails.output")
 
-# Patterns to strip from LLM output
+# ── Dangerous content patterns stripped from LLM output ──────────────────
 _SCRIPT_TAG_RE = re.compile(r"<script[^>]*>.*?</script>", re.DOTALL | re.IGNORECASE)
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _EVENT_HANDLER_RE = re.compile(r"\bon\w+\s*=\s*[\"'][^\"']*[\"']", re.IGNORECASE)
+# Matches destructive SQL statements that could be injected into downstream systems
 _SQL_INJECTION_RE = re.compile(
     r"(?i)(\b(DROP|ALTER|DELETE|INSERT|UPDATE|TRUNCATE)\s+(TABLE|DATABASE|FROM)\b"
     r"|;\s*--"
@@ -19,7 +34,8 @@ _SQL_INJECTION_RE = re.compile(
     r"|LOAD_FILE\s*\()",
 )
 
-# Category names as they appear in responses
+# Maps each category enum to the friendly names the LLM might use in its
+# response text. Used by validate_response_scope to detect cross-category leaks.
 _CATEGORY_NAMES = {
     "ENGINEERING_CONTRACTORS": [
         "engineering contractor",
@@ -48,7 +64,8 @@ _CATEGORY_NAMES = {
     ],
 }
 
-# Sensitive financial keywords that trigger scope validation
+# Financial keywords that, when combined with another category name, indicate
+# a cross-category data leak that should be redacted for non-admin users
 _SENSITIVE_KEYWORDS = re.compile(
     r"(?i)(\$[\d,]+\.?\d*(/hr)?|\bbill\s*rate\b|\bbudget\s*(allocated|spent)\b|\bavg\s*rate\b|\btotal\s*spend\b)"
 )

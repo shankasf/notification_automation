@@ -1,3 +1,13 @@
+"""AI-powered anomaly detection for hiring requisition data.
+
+Fetches requisition records from PostgreSQL and sends them to an LLM agent
+that flags unusual patterns: bill-rate spikes, headcount surges, budget
+overruns, stale requests, below-market rates, and vendor concentration risk.
+
+The agent returns a structured JSON array of findings which is parsed and
+returned to the caller (the /api/ai/analyze endpoint or background scheduler).
+"""
+
 import os
 import json
 import time
@@ -86,6 +96,7 @@ async def detect_anomalies(category: str = None, manager_id: str = None) -> list
         },
     )
 
+    # Transform raw DB tuples into dicts for the LLM prompt
     data = [
         {
             "requisitionId": r[0],
@@ -109,6 +120,8 @@ async def detect_anomalies(category: str = None, manager_id: str = None) -> list
         )
         return []
 
+    # Cap the prompt at 100 records to stay within LLM context limits;
+    # append aggregate stats so the model is still aware of the full dataset
     prompt = f"Analyze these {len(data)} requisitions for anomalies:\n{json.dumps(data[:100], indent=2)}"
     if len(data) > 100:
         avg_rate = sum(d["billRate"] for d in data) / len(data)
@@ -131,6 +144,7 @@ async def detect_anomalies(category: str = None, manager_id: str = None) -> list
 
     duration_ms = round((time.time() - start) * 1000, 2)
 
+    # Strip markdown code fences the LLM may include despite instructions
     try:
         text = result.final_output
         if "```json" in text:
@@ -150,6 +164,8 @@ async def detect_anomalies(category: str = None, manager_id: str = None) -> list
         )
         return anomalies
     except (json.JSONDecodeError, IndexError) as e:
+        # Graceful degradation: return the raw LLM text as a single finding
+        # so the caller still gets something useful even if JSON parsing fails
         logger.warning(
             "anomaly_parse_failed",
             extra={

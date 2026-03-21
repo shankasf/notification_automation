@@ -1,3 +1,14 @@
+"""Database query tools exposed to the conversational query agent.
+
+Each function decorated with @function_tool becomes a callable tool that the
+OpenAI Agents SDK can invoke during a chat turn. The tools provide read-only
+access to the Requisition, MarketRate, and RequisitionChange tables.
+
+All result sets pass through the DataClassifier guardrail before being
+returned, which strips or anonymizes fields based on their data-tier
+classification (TIER1_NEVER_LLM, TIER2_ANONYMIZE, TIER3_SAFE).
+"""
+
 from agents import function_tool
 import psycopg2
 import os
@@ -11,6 +22,8 @@ logger = get_logger("tools.db")
 
 
 def _safe_float(val, default=0.0):
+    """Convert a DB value to float, returning *default* on None or parse errors.
+    Needed because psycopg2 returns Decimal for numeric columns."""
     if val is None:
         return default
     try:
@@ -20,6 +33,8 @@ def _safe_float(val, default=0.0):
 
 
 def get_conn():
+    """Open a new psycopg2 connection from DATABASE_URL. Each tool call gets
+    its own connection (no pooling) since tool calls are infrequent."""
     logger.debug("db_connection_opening")
     return psycopg2.connect(os.environ["DATABASE_URL"])
 
@@ -101,6 +116,7 @@ def query_requisitions(
         }
         for r in rows
     ]
+    # Apply data-tier filtering before the LLM sees the results
     result = classifier.filter_for_llm(result, "Requisition")
     duration_ms = round((time.time() - start) * 1000, 2)
     logger.info(

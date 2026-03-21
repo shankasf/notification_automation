@@ -1,8 +1,20 @@
+/**
+ * Architecture page — a visual, SVG-based diagram explaining how MetaSource
+ * works at a high level for non-technical stakeholders.
+ *
+ * Shows the end-to-end flow: manager login -> dashboard -> manage requests ->
+ * change tracking / AI monitoring / AI summaries -> notifications (in-app + email).
+ *
+ * This is a standalone page (not wrapped in the dashboard layout) with its own
+ * back-to-home link. The diagram is rendered as inline SVG for crisp rendering
+ * at any zoom level.
+ */
 "use client";
 
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 
+/** Renders an SVG architecture diagram showing the MetaSource data flow. */
 export default function ArchitecturePage() {
   return (
     <div className="min-h-screen bg-white">

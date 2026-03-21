@@ -20,6 +20,13 @@ logger = get_logger("guardrails.classifier")
 
 
 class DataClassifier:
+    """Thread-safe, auto-refreshing data classification filter.
+
+    Caches classification rules in memory and refreshes them from the database
+    every 5 minutes. Uses a lock to prevent concurrent refreshes and ensure
+    consistent reads during filtering.
+    """
+
     def __init__(self):
         self._rules: dict[tuple[str, str], str] = {}  # (table, field) -> tier
         self._lock = threading.Lock()
@@ -113,7 +120,10 @@ class DataClassifier:
         return filtered
 
     def _anonymize(self, field: str, value) -> str:
-        """Anonymize a value based on field type/name."""
+        """Anonymize a value by converting it to a coarse range or generic marker.
+
+        Headcounts become "N-N+10" ranges; dollar amounts become order-of-magnitude
+        buckets. This preserves analytical utility while hiding exact figures."""
         if value is None:
             return "[ANONYMIZED]"
 

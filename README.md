@@ -341,10 +341,105 @@ Resource allocation (small dataset):
 
 ```
 meta_test/
-  frontend/       Next.js app (UI, Prisma schema, API routes for local dev)
-  gateway/        Go API server (all production API endpoints, WebSocket, SNS)
-  ai-service/     Python FastAPI (OpenAI agents, anomaly detection, chat)
-  k8s/            Kubernetes deployment + ingress YAML
+├── frontend/                       Next.js 15 — Dashboard UI, auth, Prisma schema
+│   ├── app/                        App Router pages and components
+│   │   ├── page.tsx                Home page — 5 manager cards with live metrics
+│   │   ├── layout.tsx              Root layout — sidebar nav, auth guard, providers
+│   │   ├── providers.tsx           Context providers (NextAuth, WebSocket, toasts)
+│   │   ├── dashboard/page.tsx      Stats cards, pie/bar charts, recent changes
+│   │   ├── requisitions/
+│   │   │   ├── page.tsx            Data grid — inline editing, filters, pagination
+│   │   │   ├── upload/page.tsx     CSV/JSON/Excel file uploader with progress
+│   │   │   └── components/         Table, form, and filter bar components
+│   │   ├── notifications/page.tsx  Notification center with read/unread state
+│   │   ├── changes/page.tsx        Full audit trail of field-level changes
+│   │   ├── market-intel/page.tsx   Contractor rate benchmarks by role/location
+│   │   ├── chat/page.tsx           AI chat — natural language Q&A with data
+│   │   ├── architecture/page.tsx   System architecture documentation page
+│   │   ├── components/ui/          Reusable UI components (shadcn/ui design system)
+│   │   └── api/                    Next.js API routes (proxy to Go gateway)
+│   │       ├── auth/[...nextauth]/ Google OAuth via NextAuth
+│   │       ├── requisitions/       CRUD proxy to gateway
+│   │       ├── ai/chat/            AI chat proxy to gateway
+│   │       └── ...                 Stats, managers, notifications, etc.
+│   ├── lib/                        Shared utilities
+│   │   ├── prisma.ts               Prisma ORM client singleton
+│   │   ├── utils.ts                Helper functions (formatting, calculations)
+│   │   ├── managers.ts             Manager config (5 categories, colors, icons)
+│   │   ├── sns.ts                  AWS SNS client initialization
+│   │   ├── use-websocket.ts        WebSocket hook with auto-reconnect
+│   │   └── ws-context.tsx          React context for WebSocket state
+│   └── prisma/
+│       ├── schema.prisma           Database schema (9 tables, enums)
+│       ├── migrations/             SQL migration files
+│       └── seed.ts                 Initial data — 5 sourcing managers
+│
+├── gateway/                        Go (Gin) — API Gateway, WebSocket, SQS
+│   ├── main.go                     Entrypoint — router setup, middleware, graceful shutdown
+│   ├── db/
+│   │   └── postgres.go             PostgreSQL connection pool initialization
+│   ├── handlers/                   HTTP request handlers
+│   │   ├── requisitions.go         CRUD for hiring requests + field-level change tracking
+│   │   ├── websocket.go            WebSocket hub — per-manager connections, broadcast routing
+│   │   ├── stats.go                Dashboard statistics aggregation
+│   │   ├── managers.go             List sourcing managers
+│   │   ├── notifications.go       In-app notification management
+│   │   ├── changes.go              Change log endpoint
+│   │   ├── market_rates.go         Contractor rate benchmarks
+│   │   ├── ai_proxy.go             Proxy requests to Python AI service
+│   │   ├── data_upload.go          Admin file upload pipeline trigger
+│   │   ├── upload.go               Legacy CSV import handler
+│   │   ├── sns.go                  AWS SNS topic setup and status
+│   │   ├── health.go               Health check for gateway + AI service
+│   │   ├── sqs.go                  SQS client, queue creation (3 main + 3 DLQ)
+│   │   ├── sqs_consumers.go        Long-polling consumers for async processing
+│   │   ├── auto_analyze.go         Trigger AI anomaly analysis on changes
+│   │   ├── cloudwatch.go           CloudWatch alarm setup for queue monitoring
+│   │   └── eventbridge.go          Optional scheduled task trigger
+│   └── middleware/                  Request processing pipeline
+│       ├── auth.go                  JWT validation + RBAC (admin/manager/viewer)
+│       ├── cors.go                  CORS origin restriction
+│       ├── logging.go               Structured JSON request logging
+│       ├── ratelimit.go             Per-user, per-route rate limiting
+│       ├── recovery.go              Panic recovery to prevent crashes
+│       └── audit.go                 Audit trail — logs every API call to database
+│
+├── ai-service/                     Python (FastAPI) — AI/ML Operations
+│   ├── main.py                     FastAPI app — all AI endpoints, scheduled tasks
+│   ├── ai_agents/                  OpenAI Agent SDK integrations
+│   │   ├── query_agent.py          Natural language Q&A with 6 database tools
+│   │   ├── anomaly_detector.py     Detects rate spikes, budget overruns, stale requests
+│   │   ├── summarizer.py           Converts field diffs to plain English via GPT
+│   │   ├── change_detector.py      Finds unsummarized changes (pure Python, no AI)
+│   │   ├── upload_pipeline.py      4-stage ingest: parse → clean → validate → upsert
+│   │   ├── upload_parser.py        File format detection and record extraction
+│   │   ├── upload_cleaner.py       AI-powered data normalization in parallel batches
+│   │   └── upload_models.py        Pydantic models for pipeline records
+│   ├── guardrails/                 Security & compliance enforcement
+│   │   ├── data_classifier.py      3-tier classification (NEVER_LLM/ANONYMIZE/SAFE)
+│   │   ├── pii_scanner.py          Regex detection of SSN, credit cards, emails, etc.
+│   │   ├── prompt_guard.py         Prompt injection attack pattern detection
+│   │   ├── output_sanitizer.py     Strips HTML/JS/SQL from LLM responses
+│   │   └── file_validator.py       File upload validation (type, size, content scan)
+│   ├── tools/
+│   │   └── db_tools.py             Database query tools for AI agents
+│   ├── scrapers/
+│   │   ├── rate_scraper.py         Market rate data generation/scraping
+│   │   └── data_generator.py       Sample hiring data generator for testing
+│   ├── anomaly_dedup.py            24h fingerprint dedup for anomaly notifications
+│   ├── email_notifier.py           Email dispatch to managers via SMTP/SES
+│   └── logging_config.py           Structured JSON logging configuration
+│
+├── k8s/                            Kubernetes manifests for k3s deployment
+│   ├── namespace.yaml              meta-test namespace isolation
+│   ├── deployment.yaml             3 deployments (frontend, gateway, ai-service)
+│   ├── services.yaml               ClusterIP services for internal routing
+│   ├── ingress.yaml                Traefik HTTPS routing with TLS (Let's Encrypt)
+│   ├── secrets.yaml                API keys and credentials (dev fallback)
+│   └── external-secret.yaml        AWS Secrets Manager sync via ESO (production)
+│
+├── docs/                           Documentation and interview prep materials
+└── README.md                       This file — project overview and architecture
 ```
 
 ---

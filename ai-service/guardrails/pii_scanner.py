@@ -1,4 +1,13 @@
-"""PII detection and redaction using regex patterns."""
+"""PII detection and redaction using regex patterns.
+
+Scans text for personally identifiable information (SSNs, credit cards,
+emails, phone numbers) and cloud credentials (AWS access/secret keys).
+Detected PII is replaced with tagged markers like [REDACTED_SSN] so that
+sensitive data never reaches the LLM or appears in API responses.
+
+This is an input guardrail -- applied to chat messages and uploaded file
+content before any AI processing occurs.
+"""
 
 import re
 from dataclasses import dataclass
@@ -80,7 +89,7 @@ def redact_text(text: str) -> str:
     if not findings:
         return text
 
-    # Sort by position descending so replacements don't shift indices
+    # Sort by position descending so earlier indices remain valid after replacement
     findings.sort(key=lambda f: f.start, reverse=True)
 
     result = text

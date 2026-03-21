@@ -2,6 +2,13 @@
 
 Uses an AnomalyFingerprint table to prevent sending duplicate notifications
 and emails for the same anomaly within a configurable time window (default 24h).
+
+The fingerprint is a SHA-256 hash of (anomaly_type, requisitionId, category).
+On each anomaly detection cycle, we check whether the fingerprint already
+exists within the window. If so, the notification is suppressed; otherwise a
+new row is inserted and the notification proceeds.
+
+The table and index are auto-created on application startup via ensure_table().
 """
 
 import hashlib

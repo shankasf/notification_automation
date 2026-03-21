@@ -1,3 +1,12 @@
+// File: sns.go
+// Manages AWS SNS for broadcasting requisition change events to external
+// subscribers (email, SMS, webhooks). The SNS topic "metasource-requisition-changes"
+// is created idempotently at startup. Change events flow through SQS first
+// (see sqs.go EnqueueSNSPublish) and are published to SNS by the consumer
+// in sqs_consumers.go via DoPublishSNS.
+//
+// Also provides admin endpoints for subscribing email addresses to the topic
+// (POST /api/sns/setup) and checking topic status (GET /api/sns/setup).
 package handlers
 
 import (
@@ -98,6 +107,7 @@ func DoPublishSNS(event ChangeEvent) error {
 		return fmt.Errorf("SNS not initialized: %v", snsInitErr)
 	}
 
+	// SNS email subjects are limited to 100 characters; truncate with ellipsis if needed
 	subject := fmt.Sprintf("[MetaSource] %s: %s — %s", event.Type, event.RequisitionID, event.RoleTitle)
 	runes := []rune(subject)
 	if len(runes) > 100 {
@@ -172,7 +182,7 @@ func SetupSNS(c *gin.Context) {
 		return
 	}
 
-	// Check existing subscriptions
+	// Check existing subscriptions to avoid sending duplicate confirmation emails
 	subs, err := snsClient.ListSubscriptionsByTopic(context.Background(), &sns.ListSubscriptionsByTopicInput{
 		TopicArn: aws.String(topicARN),
 	})

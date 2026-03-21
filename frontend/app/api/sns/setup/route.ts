@@ -1,3 +1,15 @@
+/**
+ * SNS Setup API route — manages AWS SNS topic and email subscriptions.
+ *
+ * POST /api/sns/setup — creates the SNS topic (idempotent) and subscribes an
+ *   email address. If the email is already subscribed, returns that info.
+ *   Otherwise, AWS sends a confirmation email the user must click.
+ *
+ * GET /api/sns/setup — health check that verifies the SNS topic exists and
+ *   returns its ARN.
+ *
+ * Used to set up email notifications for requisition change alerts.
+ */
 import { NextRequest, NextResponse } from "next/server";
 import { ensureTopic, subscribeAdminEmail } from "@/lib/sns";
 

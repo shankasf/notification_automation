@@ -1,5 +1,17 @@
+/**
+ * POST /api/ai/chat — proxy route for the AI chat service.
+ *
+ * Forwards the user's natural-language message (along with managerId and
+ * sessionId for context scoping) to the external AI service. The AI service
+ * has database access and can answer questions about hiring requests, budgets,
+ * headcount, and changes.
+ *
+ * Returns a 502 if the AI service is unreachable, with a user-friendly fallback
+ * message so the chat UI can display it gracefully.
+ */
 import { NextRequest, NextResponse } from "next/server";
 
+// External AI service URL — defaults to localhost for local dev
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || "http://localhost:8000";
 
 export async function POST(request: NextRequest) {

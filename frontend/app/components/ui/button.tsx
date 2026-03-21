@@ -1,3 +1,4 @@
+/** Reusable Button component (shadcn/ui) — supports variant, size, and asChild (Slot) props. */
 "use client";
 
 import * as React from "react";

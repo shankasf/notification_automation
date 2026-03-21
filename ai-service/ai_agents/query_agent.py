@@ -1,3 +1,15 @@
+"""Conversational query agent for workforce / hiring data.
+
+Wraps an OpenAI Agents SDK tool-calling agent that can answer natural-language
+questions from sourcing managers. The agent has access to seven database tools
+(see tools/db_tools.py) and uses them to look up live requisition data before
+composing its answer.
+
+Before returning the response to the user, output guardrails are applied:
+dangerous content is stripped (XSS, SQL injection) and cross-category
+financial data is redacted for non-admin users.
+"""
+
 import os
 import time
 
@@ -85,9 +97,11 @@ async def process_query(message: str, manager_id: str = None, category: str = No
     )
     start = time.time()
 
+    # Build a context prefix that tells the LLM who the user is and which
+    # category to scope tool calls to. Without this, the agent would not know
+    # which manager's data to query.
     context = ""
     if manager_id:
-        # Look up the manager's name and category so the agent queries the right data
         try:
             conn = _psycopg2.connect(_os.environ["DATABASE_URL"])
             cur = conn.cursor()
@@ -115,7 +129,8 @@ async def process_query(message: str, manager_id: str = None, category: str = No
         with custom_span("agent_execution"):
             result = await Runner.run(query_agent, prompt)
 
-    # Output guardrails
+    # Output guardrails: strip XSS/SQL patterns, then redact any cross-category
+    # financial data the LLM may have included for non-admin users
     output = sanitize_llm_output(result.final_output)
     if category:
         output = validate_response_scope(output, category)

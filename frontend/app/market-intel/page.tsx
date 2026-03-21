@@ -1,3 +1,16 @@
+/**
+ * Market Rates page — compares internal bill rates against external market
+ * benchmarks to help sourcing managers identify over/under-paying situations.
+ *
+ * Displays:
+ *  - Horizontal bar chart comparing internal vs market average rates by role
+ *  - Rate cards grouped by category, each showing role, location, source,
+ *    market median, internal average, and percentage variance
+ *  - Data collection history table (scrape logs with status, duration, errors)
+ *  - "Collect Market Data" button that triggers the AI scraping service
+ *
+ * Rate variance highlights: >5% over market shows red, >5% under shows green.
+ */
 "use client";
 
 import { useEffect, useState, Suspense } from "react";
@@ -119,7 +132,8 @@ function MarketIntelContent() {
     fetchData();
   };
 
-  // Build comparison chart data
+  // Build comparison chart data by matching internal rates against market medians.
+  // When a role has market data from multiple locations, medians are averaged.
   const comparisonData: Record<
     string,
     { role: string; internal: number; market: number }

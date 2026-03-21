@@ -1,3 +1,16 @@
+/**
+ * CSV Upload page — allows managers to bulk-import hiring requests from a CSV file.
+ *
+ * Flow:
+ *  1. Drag-and-drop or browse to select a .csv file
+ *  2. PapaParse parses the first 10 rows for a preview table
+ *  3. Detected column headers are displayed as badges
+ *  4. User clicks "Import" to POST the file to /api/requisitions/upload
+ *  5. Results page shows created/updated/error counts
+ *
+ * The API handles column alias resolution (e.g., "role_title" -> "roleTitle")
+ * and category normalization server-side.
+ */
 "use client";
 
 import { useState, useCallback, Suspense } from "react";

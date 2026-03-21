@@ -1,3 +1,10 @@
+// File: upload.go
+// Handles POST /api/requisitions/upload for bulk CSV import of hiring requests.
+// Parses CSV files with flexible header aliases (e.g., "role_title", "title",
+// "position" all map to roleTitle), normalizes human-readable category names
+// to database enum values, generates sequential requisition IDs per category,
+// creates change records, notifies affected managers via WebSocket and in-app
+// notifications, and publishes an SNS event for the bulk import.
 package handlers
 
 import (
@@ -16,6 +23,8 @@ import (
 	"github.com/google/uuid"
 )
 
+// UploadCSV parses a CSV file, validates required columns, normalizes categories,
+// inserts requisitions, and triggers downstream notifications.
 func UploadCSV(c *gin.Context) {
 	file, _, err := c.Request.FormFile("file")
 	if err != nil {
@@ -31,7 +40,8 @@ func UploadCSV(c *gin.Context) {
 		return
 	}
 
-	// Normalize headers
+	// Map each CSV header to a canonical field name using fuzzy alias matching.
+	// This lets users upload CSVs with varying column naming conventions.
 	colMap := map[string]int{}
 	aliases := map[string][]string{
 		"roleTitle":       {"role_title", "role", "title", "position", "job_title"},
@@ -75,7 +85,8 @@ func UploadCSV(c *gin.Context) {
 	errors := []string{}
 	now := time.Now()
 
-	// Normalize human-readable category aliases to DB enum values
+	// Map human-readable category names (e.g., "engineering", "eng") to the
+	// database enum values expected by the Requisition.category column.
 	categoryAliases := map[string]string{
 		"engineering": "ENGINEERING_CONTRACTORS", "eng": "ENGINEERING_CONTRACTORS",
 		"engineering contractors": "ENGINEERING_CONTRACTORS", "tech": "ENGINEERING_CONTRACTORS",
@@ -98,7 +109,8 @@ func UploadCSV(c *gin.Context) {
 		"DATA_OPERATIONS": "DOP", "MARKETING_CREATIVE": "MKT", "CORPORATE_SERVICES": "COR",
 	}
 
-	// Track per-category created counts for correct reqID sequencing
+	// Track how many rows we have already inserted per category in this batch,
+	// so the generated requisition IDs (REQ-ENG-001, REQ-ENG-002, ...) don't collide.
 	catCreatedCounts := map[string]int{}
 
 	for {
@@ -163,6 +175,7 @@ func UploadCSV(c *gin.Context) {
 		if loc == "" {
 			loc = "Remote"
 		}
+		// Default budget = hourly rate * headcount * 2080 (standard work hours/year)
 		budget := rate * float64(hc) * 2080
 
 		_, err = db.DB.Exec(`
@@ -189,9 +202,9 @@ func UploadCSV(c *gin.Context) {
 		catCreatedCounts[cat]++
 	}
 
-	// Notify affected managers
+	// Notify affected managers — find which managers own categories that received
+	// new records, create in-app notifications, and push via WebSocket.
 	catCounts := map[string]int{}
-	// We'll count created per category from the data
 	rows, _ := db.DB.Query(`
 		SELECT r.category, m.id, COUNT(*)
 		FROM "RequisitionChange" rc

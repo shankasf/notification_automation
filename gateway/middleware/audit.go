@@ -1,3 +1,14 @@
+// File: audit.go
+// Implements asynchronous audit logging for all authenticated API requests.
+// Every request's metadata (user, action, resource, status code, duration) is
+// sent to a background writer goroutine via a buffered channel. The writer
+// batches entries and performs a single multi-row INSERT every 50 entries or
+// every 5 seconds (whichever comes first), minimizing database round-trips.
+//
+// The audit channel is capacity-bounded (1000 entries). If the channel fills
+// up (e.g., during a burst), new entries are dropped with a warning log rather
+// than blocking the request. FlushAuditLog must be called during shutdown to
+// drain remaining entries.
 package middleware
 
 import (

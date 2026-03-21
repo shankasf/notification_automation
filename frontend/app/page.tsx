@@ -1,3 +1,13 @@
+/**
+ * Home page — the main entry point of the MetaSource application.
+ *
+ * Shows a branded sign-in screen for unauthenticated users, and once signed in,
+ * displays an admin hub listing all sourcing managers with real-time stats
+ * (total requests, unfilled positions, alerts). Non-admin managers are
+ * auto-redirected to their personal dashboard.
+ *
+ * Subscribes to WebSocket events so manager cards update live when data changes.
+ */
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
@@ -6,6 +16,7 @@ import { useRouter } from "next/navigation";
 import { useSession, signIn, signOut } from "next-auth/react";
 import { useWebSocket, type WSMessage } from "@/lib/use-websocket";
 
+// Hardcoded admin email — only this user sees the full admin hub; all others auto-redirect
 const ADMIN_EMAIL = "sagarshankarnusa@gmail.com";
 import {
   Code2,
@@ -35,6 +46,7 @@ interface ManagerData {
   unreadNotifications: number;
 }
 
+// Maps Lucide icon names (stored in MANAGER_CONFIG) to rendered JSX for manager cards
 const iconMap: Record<string, React.ReactNode> = {
   Code2: <Code2 className="h-5 w-5" />,
   Shield: <Shield className="h-5 w-5" />,
@@ -43,6 +55,7 @@ const iconMap: Record<string, React.ReactNode> = {
   Building2: <Building2 className="h-5 w-5" />,
 };
 
+/** Main home page component — handles auth state, manager listing, and real-time updates. */
 export default function HomePage() {
   const { data: session, status } = useSession();
   const router = useRouter();

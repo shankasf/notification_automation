@@ -1,3 +1,13 @@
+// File: websocket.go
+// Implements real-time push notifications via WebSocket. The Hub maintains a
+// map of managerID -> set of active WebSocket connections. When any part of
+// the system calls NotifHub.Broadcast(), the message is sent to all connections
+// belonging to that manager AND to all admin connections (so admins see
+// everything). The broadcast channel is buffered (256) and uses non-blocking
+// sends to avoid blocking the caller if the write loop falls behind.
+//
+// Authentication is handled via a JWT token passed as a query parameter
+// (?token=...) since browsers' WebSocket API doesn't support custom headers.
 package handlers
 
 import (
@@ -13,7 +23,8 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// Hub manages WebSocket connections per manager
+// Hub manages WebSocket connections grouped by manager ID.
+// Admin connections receive broadcasts for ALL managers.
 type Hub struct {
 	mu          sync.RWMutex
 	connections map[string]map[*websocket.Conn]bool // managerId -> set of connections
@@ -26,6 +37,9 @@ type BroadcastMsg struct {
 	Payload   interface{} `json:"payload"`
 }
 
+// NotifHub is the singleton hub instance, initialized at package load time.
+// The broadcast channel is buffered at 256 to absorb burst traffic without
+// blocking producers (handlers that call Broadcast).
 var NotifHub = &Hub{
 	connections: make(map[string]map[*websocket.Conn]bool),
 	broadcast:   make(chan BroadcastMsg, 256),
@@ -57,6 +71,7 @@ var wsUpgrader = websocket.Upgrader{
 }
 
 func init() {
+	// Start the hub's write loop in the background at package init time
 	go NotifHub.run()
 }
 
@@ -68,7 +83,9 @@ func (h *Hub) run() {
 			continue
 		}
 
-		// Snapshot connections with their owner IDs under lock
+		// Snapshot connection pointers under a read lock, then write outside
+		// the lock to minimize lock hold time. Admin connections always receive
+		// every broadcast so admins get a full system view.
 		type connOwner struct {
 			conn    *websocket.Conn
 			ownerID string
@@ -115,6 +132,9 @@ func (h *Hub) removeConn(managerID string, conn *websocket.Conn) {
 	}
 }
 
+// Broadcast enqueues a message for delivery to a manager's WebSocket connections.
+// Uses a non-blocking send so producers are never stalled by a slow write loop.
+// If the channel is full, the message is dropped and a warning is logged.
 func (h *Hub) Broadcast(managerID, msgType string, payload interface{}) {
 	select {
 	case h.broadcast <- BroadcastMsg{

@@ -1,3 +1,19 @@
+/**
+ * Database seed script — populates the MetaSource database with realistic
+ * demo data for development and testing.
+ *
+ * Creates:
+ *  - 5 sourcing managers (one per category)
+ *  - 1,000 hiring requisitions (200 per category) with unique role/team/vendor/location combos
+ *  - 100 change records (status, rate, headcount, budget changes)
+ *  - 30 notifications (change summaries, anomaly alerts, budget warnings, milestones)
+ *  - Notification rules for each manager (rate threshold, budget warning, etc.)
+ *  - ~50 market rate benchmarks across all categories and locations
+ *  - 5 scrape log entries
+ *
+ * Run with: npx prisma db seed
+ * The script is idempotent — it deletes all existing data before re-seeding.
+ */
 import {
   PrismaClient,
   RequisitionCategory,
@@ -8,6 +24,8 @@ import {
 } from "@prisma/client";
 
 const prisma = new PrismaClient();
+
+// --- Randomization helpers for generating realistic seed data ---
 
 function randomInt(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
@@ -21,6 +39,7 @@ function pick<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
+/** Picks an item with weighted probability — used to make ACTIVE status more common than CANCELLED. */
 function weightedPick<T>(items: T[], weights: number[]): T {
   const total = weights.reduce((a, b) => a + b, 0);
   let r = Math.random() * total;

@@ -1,3 +1,16 @@
+/**
+ * GET /api/stats — returns aggregated dashboard statistics.
+ *
+ * Computes:
+ *  - totalReqs: count of active (non-completed, non-cancelled) requisitions
+ *  - headcountGap: total needed - total filled across active requisitions
+ *  - budgetAllocated / budgetSpent: summed budget figures
+ *  - criticalCount: number of CRITICAL priority active requisitions
+ *  - byCategory: request count grouped by category (active only)
+ *  - byStatus: request count grouped by status (all statuses for chart)
+ *
+ * Optionally scoped to a specific manager's category via ?managerId= parameter.
+ */
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { RequisitionCategory, RequisitionStatus } from "@prisma/client";

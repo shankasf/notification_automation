@@ -1,3 +1,15 @@
+"""Pure-Python change detector for unsummarized requisition changes.
+
+Queries the RequisitionChange table for rows whose `summary` column is NULL
+(i.e., not yet processed by the summarizer) within a given time window, and
+groups them by workforce category. No LLM is involved here -- this is a
+simple database scan that feeds into the AI summarizer.
+
+Used by:
+- The /api/ai/detect-changes endpoint (on-demand)
+- The scheduled_summarize background task (every 15 minutes)
+"""
+
 import psycopg2
 import os
 import time
@@ -35,6 +47,8 @@ def detect_changes(since: datetime = None):
         )
 
         changes = cur.fetchall()
+        # Group changes by category (column index 7) so each category
+        # can be summarized independently
         grouped = {}
         for change in changes:
             cat = change[7]

@@ -1,3 +1,18 @@
+/**
+ * WebSocket context (LiveUpdates) — provides real-time update counters to all
+ * child components within the dashboard layout.
+ *
+ * Instead of passing WebSocket messages directly, this context exposes
+ * monotonically-increasing sequence numbers that pages can watch via useEffect:
+ *  - changeSequence: incremented on "change" or "refresh" WS events
+ *  - notificationSequence: incremented on "notification" or "refresh" events
+ *  - readSequence: incremented when user marks notifications as read (local action)
+ *
+ * This decoupling allows pages to independently decide when and how to refetch
+ * their data without tightly coupling to the WS message format.
+ *
+ * Also fires toast notifications (via onToast callback) for real-time popups.
+ */
 "use client";
 
 import { createContext, useContext, useState, useCallback, useRef } from "react";

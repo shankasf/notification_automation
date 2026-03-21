@@ -1,3 +1,14 @@
+"""Synthetic market-rate data generator.
+
+Populates the MarketRate table with realistic hourly contractor rates for
+35 roles across 7 locations and 5 workforce categories. Rates are derived
+from hand-curated base ranges with location-based cost-of-living adjustments
+and small random noise to simulate real-world variance.
+
+Each run replaces all existing MarketRate rows (full refresh) and logs
+the operation to the ScrapeLog table for audit purposes.
+"""
+
 import psycopg2
 import os
 import random
@@ -85,7 +96,7 @@ def generate_market_rates():
         category_count = 0
         for role, rates in roles.items():
             for location in LOCATIONS:
-                # Add location-based adjustment
+                # Cost-of-living multiplier by metro area
                 loc_factor = {
                     "New York, NY": 1.15,
                     "Menlo Park, CA": 1.12,
@@ -96,7 +107,7 @@ def generate_market_rates():
                     "Remote": 0.92,
                 }
                 factor = loc_factor.get(location, 1.0)
-                # Add some randomness
+                # +/-5% jitter to prevent identical rows across runs
                 noise = random.uniform(0.95, 1.05)
 
                 cur.execute(

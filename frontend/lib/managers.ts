@@ -42,6 +42,7 @@ export const MANAGER_CONFIG = {
 
 export type CategoryKey = keyof typeof MANAGER_CONFIG;
 
+/** Tailwind class strings for requisition status badges. */
 export const STATUS_COLORS: Record<string, string> = {
   OPEN: "bg-blue-100 text-blue-800",
   SOURCING: "bg-yellow-100 text-yellow-800",
@@ -53,6 +54,7 @@ export const STATUS_COLORS: Record<string, string> = {
   CANCELLED: "bg-red-100 text-red-800",
 };
 
+/** Tailwind class strings for priority level badges. */
 export const PRIORITY_COLORS: Record<string, string> = {
   CRITICAL: "bg-red-100 text-red-800",
   HIGH: "bg-orange-100 text-orange-800",
@@ -60,6 +62,7 @@ export const PRIORITY_COLORS: Record<string, string> = {
   LOW: "bg-green-100 text-green-800",
 };
 
+/** Tailwind class strings for change type badges in the change log. */
 export const CHANGE_TYPE_COLORS: Record<string, string> = {
   CREATED: "bg-green-100 text-green-800",
   UPDATED: "bg-blue-100 text-blue-800",
@@ -70,6 +73,7 @@ export const CHANGE_TYPE_COLORS: Record<string, string> = {
   BULK_IMPORT: "bg-indigo-100 text-indigo-800",
 };
 
+/** Tailwind class strings for notification type badges and icon backgrounds. */
 export const NOTIFICATION_TYPE_COLORS: Record<string, string> = {
   CHANGE_SUMMARY: "bg-blue-100 text-blue-800",
   ANOMALY_ALERT: "bg-red-100 text-red-800",

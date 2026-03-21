@@ -1,3 +1,19 @@
+"""FastAPI application entry point for the MetaSource AI Service.
+
+This is the main HTTP server that exposes REST endpoints for the AI-powered
+workforce management platform. It orchestrates:
+- Natural-language chat queries against hiring/requisition data
+- AI-driven change summarization and anomaly detection
+- File upload processing through a multi-agent pipeline
+- Market rate scraping / generation
+- Manager email notifications with anomaly deduplication
+- Background schedulers for periodic summarization and anomaly scans
+
+All endpoints apply input guardrails (prompt injection, PII redaction, length
+limits) and output guardrails (sanitization, scope validation) before and after
+LLM calls.
+"""
+
 import asyncio
 import os
 import sys
@@ -48,6 +64,7 @@ from anomaly_dedup import compute_fingerprint, is_duplicate, record_fingerprint,
 
 app = FastAPI(title="MetaSource AI Service", version="1.0.0")
 
+# CORS restricted to the Go gateway (both k8s service name and local dev)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://meta-gateway:8080", "http://localhost:8080"],
@@ -550,6 +567,7 @@ async def process_upload(request: UploadProcessRequest):
         },
     )
 
+    # Decode base64 binary payload (e.g., xlsx) sent from the gateway
     raw_bytes = None
     if request.rawBytes:
         import base64
@@ -586,6 +604,7 @@ async def process_upload(request: UploadProcessRequest):
                     file_type=request.fileType,
                     raw_bytes=raw_bytes,
                 )
+        # Evict stale results first, then cache this one for status polling
         _cleanup_old_jobs()
         result["_stored_at"] = time.time()
         _upload_jobs[request.jobId] = result
@@ -633,7 +652,12 @@ scheduler_logger = get_logger("scheduler")
 
 
 async def scheduled_summarize():
-    """Find unsummarized changes, summarize by category, update records, create notifications."""
+    """Periodically find unsummarized RequisitionChange rows, generate AI summaries
+    grouped by category, stamp the summary back onto each change row, create an
+    in-app Notification for the category manager, and send an email.
+
+    Runs every 15 minutes in the background.
+    """
     while True:
         await asyncio.sleep(900)  # 15 minutes
         scheduler_logger.info("scheduled_summarize_started")
@@ -727,7 +751,12 @@ async def scheduled_summarize():
 
 
 async def scheduled_anomaly_scan():
-    """Run anomaly detection daily at 10 AM UTC."""
+    """Run anomaly detection daily at 10 AM UTC across all five workforce categories.
+
+    For each category, calls the AI anomaly detector, deduplicates results against
+    the AnomalyFingerprint table (24h window), creates in-app Notifications, and
+    sends a consolidated email to the category manager.
+    """
     while True:
         # Calculate seconds until next 10 AM UTC
         now = datetime.now(timezone.utc)
@@ -777,6 +806,7 @@ async def scheduled_anomaly_scan():
                         },
                     )
 
+                    # Create in-app notifications and email for new (non-duplicate) anomalies
                     with custom_span(f"anomaly_notify_{category}"):
                         conn = psycopg2.connect(os.environ["DATABASE_URL"])
                         cur = conn.cursor()
@@ -789,6 +819,7 @@ async def scheduled_anomaly_scan():
                             if row:
                                 manager_id = row[0]
                                 all_msgs = []
+                                # Cap at 5 anomalies per category to avoid notification spam
                                 for anomaly in anomalies[:5]:
                                     a_type = anomaly.get("type", "unknown")
                                     a_severity = anomaly.get("severity", "medium")

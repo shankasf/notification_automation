@@ -1,3 +1,18 @@
+/**
+ * AI Data Upload page (admin-only) — handles multi-format file uploads through
+ * the AI-powered processing pipeline.
+ *
+ * Unlike the simpler CSV upload at /requisitions/upload, this page supports
+ * CSV, Excel (.xlsx), JSON, and plain text files. The backend AI service
+ * parses, cleans, validates, and imports records automatically.
+ *
+ * Features:
+ *  - Drag-and-drop or file browser upload
+ *  - 4-stage pipeline progress indicator (Parse -> Clean -> Validate -> Upload)
+ *  - WebSocket-powered real-time progress updates during processing
+ *  - Per-record results table showing status, cleaned data, and errors
+ *  - Summary cards (created / failed / total processed)
+ */
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
@@ -84,6 +99,7 @@ const STATUS_COLORS: Record<string, string> = {
   FAILED: "bg-red-100 text-red-700",
 };
 
+/** Admin-only page for AI-powered multi-format data import with pipeline progress. */
 export default function DataUploadPage() {
   const [file, setFile] = useState<File | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -129,6 +145,9 @@ export default function DataUploadPage() {
     } catch {}
   }, [uploading]);
 
+  // Updates the 4-stage progress indicator based on the current pipeline stage.
+  // Stages before the current one are marked "done", the current is "active",
+  // and future stages remain "pending". On failure, stages are marked "error".
   const updateStages = (currentStage: string) => {
     const order = ["parsing", "cleaning", "validating", "uploading", "completed"];
     const currentIdx = order.indexOf(currentStage);

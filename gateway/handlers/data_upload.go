@@ -1,3 +1,8 @@
+// File: data_upload.go
+// Handles admin-only file uploads that are forwarded to the Python AI pipeline
+// for processing (e.g., bulk requisition import from spreadsheets). Also provides
+// a progress callback endpoint that the Python service calls to push real-time
+// upload progress updates to admin WebSocket connections.
 package handlers
 
 import (
@@ -47,7 +52,8 @@ func DataUpload(pythonURL string) gin.HandlerFunc {
 			"fileType": ext,
 		}
 
-		// For binary files (xlsx), base64 encode; for text, send as string
+		// Binary spreadsheets must be base64-encoded since the AI service
+		// expects a JSON body; text-based formats (CSV, TXT) are sent as-is.
 		if ext == "xlsx" || ext == "xls" {
 			body["fileContent"] = ""
 			body["rawBytes"] = base64.StdEncoding.EncodeToString(data)
@@ -57,7 +63,9 @@ func DataUpload(pythonURL string) gin.HandlerFunc {
 
 		jsonBody, _ := json.Marshal(body)
 
-		client := &http.Client{Timeout: 300 * time.Second} // 5 min timeout for large files
+		// 5-minute timeout accommodates large spreadsheets that the AI pipeline
+		// needs to parse, validate, and insert row-by-row.
+		client := &http.Client{Timeout: 300 * time.Second}
 		resp, err := client.Post(
 			pythonURL+"/api/ai/upload/process",
 			"application/json",
@@ -75,7 +83,7 @@ func DataUpload(pythonURL string) gin.HandlerFunc {
 
 		slog.Info("data_upload_completed", "job_id", jobID, "result", result)
 
-		// Broadcast completion notification
+		// Notify all connected admin WebSocket clients about the import result
 		if created, ok := result["created"].(float64); ok && created > 0 {
 			NotifHub.Broadcast("admin", "change", gin.H{
 				"changeType": "BULK_IMPORT",

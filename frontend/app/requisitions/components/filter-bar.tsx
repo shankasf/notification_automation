@@ -1,3 +1,9 @@
+/**
+ * FilterBar — horizontal bar of search input and dropdown filters used on the
+ * requisitions list page. Allows filtering by text search, category, status,
+ * and priority. The category filter is hidden when viewing a specific manager
+ * (their category is fixed).
+ */
 "use client";
 
 import { Search, X } from "lucide-react";
@@ -38,6 +44,7 @@ const statuses = [
 
 const priorities = ["CRITICAL", "HIGH", "MEDIUM", "LOW"];
 
+/** Renders search + category/status/priority dropdown filters with a clear button. */
 export function FilterBar({
   search,
   onSearchChange,

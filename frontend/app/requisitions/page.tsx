@@ -1,3 +1,15 @@
+/**
+ * Hiring Requests (Requisitions) page — lists, filters, paginates, and manages
+ * requisition records for a manager or across all managers (admin view).
+ *
+ * Supports:
+ *  - Full-text search by ID, role title, vendor, and location
+ *  - Dropdown filters for category, status, and priority
+ *  - Inline editing of status, priority, and bill rate directly in the table
+ *  - Create and edit via a modal form (RequisitionForm)
+ *  - CSV upload navigation
+ *  - Real-time table refresh via WebSocket change events
+ */
 "use client";
 
 import { useEffect, useState, useCallback, Suspense } from "react";
@@ -29,6 +41,7 @@ interface Requisition {
   department: string;
 }
 
+/** Inner content — reads search params, so must be wrapped in Suspense. */
 function RequisitionsContent() {
   const searchParams = useSearchParams();
   const managerId = searchParams.get("manager");
@@ -51,6 +64,7 @@ function RequisitionsContent() {
   const [formOpen, setFormOpen] = useState(false);
   const [editingReq, setEditingReq] = useState<Record<string, unknown> | null>(null);
 
+  // Attach the current user's email as X-Changed-By for audit trail on mutations
   const userHeaders = (): HeadersInit => ({
     "Content-Type": "application/json",
     "X-Changed-By": session?.user?.email || "user",
@@ -83,6 +97,7 @@ function RequisitionsContent() {
     if (changeSequence > 0) fetchData(true);
   }, [changeSequence, fetchData]);
 
+  // Debounce fetch by 300ms to avoid excessive requests while typing in search
   useEffect(() => {
     const timer = setTimeout(fetchData, 300);
     return () => clearTimeout(timer);

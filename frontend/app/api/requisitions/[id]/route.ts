@@ -1,3 +1,14 @@
+/**
+ * Single requisition API route — GET, PUT, DELETE by internal UUID.
+ *
+ * GET  /api/requisitions/:id — returns requisition with its full change history
+ * PUT  /api/requisitions/:id — updates fields and auto-tracks changes:
+ *   - Compares old/new values for trackable fields (status, rate, headcount, etc.)
+ *   - Creates RequisitionChange records with appropriate ChangeType
+ *   - Auto-recalculates budgetAllocated when rate or headcount changes
+ *   - Creates a CHANGE_SUMMARY notification for the affected manager
+ * DELETE /api/requisitions/:id — hard-deletes the requisition (cascading via Prisma)
+ */
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { prisma } from "@/lib/prisma";
@@ -54,7 +65,7 @@ export async function PUT(
       );
     }
 
-    // Track changes
+    // Build a list of change records by comparing old and new values for each trackable field
     const changeRecords: {
       changeType: ChangeType;
       fieldChanged: string;

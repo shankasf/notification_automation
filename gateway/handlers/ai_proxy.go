@@ -1,3 +1,9 @@
+// File: ai_proxy.go
+// Provides a generic reverse proxy handler that forwards requests to the
+// Python AI service. This avoids duplicating AI logic in Go — the gateway
+// handles auth, rate limiting, and audit, then proxies the request body and
+// headers (including user identity) to the Python backend, returning the
+// response verbatim. Used for /api/ai/* routes and /api/data-upload/:jobId/status.
 package handlers
 
 import (
@@ -36,7 +42,8 @@ func GenericProxyHandler(pythonURL string) gin.HandlerFunc {
 			return
 		}
 
-		// Forward headers
+		// Forward all original headers so the AI service receives content-type,
+		// accept, etc. Then overlay identity headers from the auth middleware.
 		for key, vals := range c.Request.Header {
 			for _, val := range vals {
 				req.Header.Add(key, val)
@@ -78,6 +85,10 @@ func GenericProxyHandler(pythonURL string) gin.HandlerFunc {
 	}
 }
 
+// bodyReader is a minimal io.Reader wrapper around a byte slice, used to
+// re-read the request body after it has been consumed by io.ReadAll.
+// This is necessary because http.NewRequest needs an io.Reader but we
+// already drained the original body for logging/inspection.
 type bodyReader struct {
 	data []byte
 	pos  int

@@ -1,3 +1,8 @@
+// Package db manages the PostgreSQL connection pool used by all handlers.
+// It exposes a single package-level *sql.DB that is initialized once at
+// startup via Connect(). Connection parameters are read from environment
+// variables (DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME) so that
+// credentials are never hardcoded.
 package db
 
 import (
@@ -10,8 +15,11 @@ import (
 	_ "github.com/lib/pq"
 )
 
+// DB is the shared connection pool. Initialized by Connect(), closed in main().
 var DB *sql.DB
 
+// Connect validates that all required env vars are present, opens a connection
+// pool with tuned limits, and pings the database to verify connectivity.
 func Connect() error {
 	host := os.Getenv("DB_HOST")
 	port := os.Getenv("DB_PORT")
@@ -49,6 +57,9 @@ func Connect() error {
 		return fmt.Errorf("failed to open database: %w", err)
 	}
 
+	// Pool tuning: 25 max open prevents exhausting PostgreSQL's default 100-connection limit
+	// across multiple gateway replicas. 5-minute lifetime forces periodic reconnection
+	// to pick up DNS changes and release server-side resources.
 	DB.SetMaxOpenConns(25)
 	DB.SetMaxIdleConns(10)
 	DB.SetConnMaxLifetime(5 * time.Minute)

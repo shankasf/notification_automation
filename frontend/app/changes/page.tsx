@@ -1,3 +1,16 @@
+/**
+ * Change Log page — paginated, filterable audit trail of all requisition changes.
+ *
+ * Each row shows timestamp, requisition ID, change type (badge), field changed,
+ * old -> new values, and who made the change. Rows expand on click to show full
+ * detail including role title, category, AI summary, and navigation links.
+ *
+ * Supports filtering by change type and date range. Can also be pre-filtered
+ * to a specific requisition via the "requisitionId" URL parameter (linked from
+ * the requisition table's "View Change Log" action).
+ *
+ * Auto-refetches via WebSocket change events.
+ */
 "use client";
 
 import React, { useEffect, useState, Suspense } from "react";

@@ -1,3 +1,4 @@
+/** Reusable Select dropdown component (shadcn/ui) — built on Radix UI Select primitive. */
 "use client";
 
 import * as React from "react";

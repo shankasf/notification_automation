@@ -1,3 +1,11 @@
+/**
+ * RequisitionForm — modal dialog for creating or editing a hiring request.
+ *
+ * Uses Zod schema validation to enforce required fields (role title, category,
+ * team, department, vendor, location, bill rate, headcount). Resets form state
+ * each time the dialog opens. Supports both "Create" and "Edit" modes depending
+ * on whether initialData is provided.
+ */
 "use client";
 
 import { useState, useEffect } from "react";
@@ -50,6 +58,7 @@ const locations = [
   "Singapore",
 ];
 
+/** Modal form for creating or editing a requisition. Validates with Zod before submitting. */
 export function RequisitionForm({ open, onClose, onSubmit, initialData }: RequisitionFormProps) {
   const [formData, setFormData] = useState<Record<string, string | number>>({
     roleTitle: (initialData?.roleTitle as string) || "",

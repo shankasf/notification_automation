@@ -1,3 +1,16 @@
+/**
+ * GET /api/managers — returns all sourcing managers with their portfolio stats.
+ *
+ * For each manager, returns:
+ *  - Basic info (id, name, email, category, avatarUrl)
+ *  - totalReqs: count of active requisitions in their category
+ *  - headcountGap: unfilled positions (needed - filled) across their category
+ *  - unreadNotifications: count of unread notifications
+ *
+ * Active requisitions exclude COMPLETED and CANCELLED statuses.
+ * Used by the home page to render manager cards and by the dashboard layout
+ * to resolve the current user's display name and role.
+ */
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 

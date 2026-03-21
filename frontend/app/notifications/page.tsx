@@ -1,3 +1,18 @@
+/**
+ * Notifications page — displays all notifications for a manager (or admin),
+ * grouped by date. Supports filtering by notification type and bulk mark-all-read.
+ *
+ * Notification types:
+ *  - CHANGE_SUMMARY: grouped change digests
+ *  - ANOMALY_ALERT: unusual rate/activity detected by AI
+ *  - BUDGET_WARNING: budget threshold or overspend alerts
+ *  - MILESTONE: headcount or vendor performance milestones
+ *
+ * Clicking a notification marks it as read and navigates to the relevant page
+ * (e.g., ANOMALY_ALERT -> requisitions, MILESTONE -> dashboard).
+ *
+ * Auto-refetches via WebSocket when new notifications arrive.
+ */
 "use client";
 
 import { useEffect, useState, Suspense } from "react";
@@ -42,6 +57,7 @@ const typeIcons: Record<string, React.ReactNode> = {
   MILESTONE: <Trophy className="h-4 w-4" />,
 };
 
+/** Groups notifications by formatted date string for timeline-style display. */
 function groupByDate(notifications: Notification[]): Record<string, Notification[]> {
   const groups: Record<string, Notification[]> = {};
   for (const n of notifications) {
@@ -57,6 +73,7 @@ function groupByDate(notifications: Notification[]): Record<string, Notification
   return groups;
 }
 
+// Maps notification types to the page the user should land on when clicking
 const typeRoutes: Record<string, string> = {
   CHANGE_SUMMARY: "/changes",
   ANOMALY_ALERT: "/requisitions",

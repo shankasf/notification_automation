@@ -1,3 +1,8 @@
+// File: health.go
+// Provides health check and debug/stats endpoints. The health check verifies
+// both the PostgreSQL connection and the Python AI service, returning 503 if
+// either is unhealthy. The debug stats endpoint (admin-only) exposes Go runtime
+// metrics, database pool stats, WebSocket connection count, and SQS queue depths.
 package handlers
 
 import (
@@ -10,6 +15,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// HealthCheck returns a composite health status of the gateway, database,
+// and AI service. Returns 200 when all are healthy, 503 otherwise.
 func HealthCheck(pythonURL string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Check DB
@@ -44,6 +51,9 @@ func HealthCheck(pythonURL string) gin.HandlerFunc {
 	}
 }
 
+// DebugStats returns runtime diagnostics for the admin dashboard: goroutine count,
+// memory allocation, GC cycles, DB pool utilization, WebSocket connections,
+// and SQS queue depths. This is a read-only diagnostic endpoint.
 func DebugStats(c *gin.Context) {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
@@ -76,6 +86,7 @@ func DebugStats(c *gin.Context) {
 	c.JSON(200, resp)
 }
 
+// statusStr converts a boolean health flag to "ok" or "error" for JSON output.
 func statusStr(ok bool) string {
 	if ok {
 		return "ok"

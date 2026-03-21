@@ -1,4 +1,11 @@
-"""Upload file validation — extension allowlist, size limits, magic byte checks."""
+"""Upload file validation -- extension allowlist, size limits, magic byte checks.
+
+Provides a security gate for user-uploaded files before they enter the AI
+pipeline. Prevents processing of disallowed file types (e.g., executables),
+oversized files (>10 MB), and files whose binary headers don't match their
+claimed extension (e.g., a .exe renamed to .xlsx). Also integrates with the
+PII scanner to flag sensitive data in file content.
+"""
 
 from logging_config import get_logger
 from guardrails.pii_scanner import scan_text, PIIFinding
@@ -8,7 +15,9 @@ logger = get_logger("guardrails.file")
 ALLOWED_EXTENSIONS = {".csv", ".xlsx", ".xls", ".json", ".txt"}
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 
-# Magic bytes for common file types
+# Magic bytes (file signatures) used to verify that binary content matches
+# the claimed extension. CSV/TXT are excluded because they have no reliable
+# magic bytes.
 MAGIC_BYTES: dict[bytes, list[str]] = {
     b"PK": [".xlsx", ".xls"],  # ZIP-based (XLSX)
     b"\xd0\xcf\x11\xe0": [".xls"],  # OLE2 (old Excel)

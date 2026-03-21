@@ -1,3 +1,16 @@
+/**
+ * AI Chat page — conversational interface for querying hiring request data
+ * using natural language. Messages are sent to the backend AI service
+ * (via /api/ai/chat) which has access to the full database context.
+ *
+ * Features:
+ *  - Suggestion chips for common queries (e.g., "How many open hiring requests?")
+ *  - Chat history persisted in sessionStorage (keyed by managerId)
+ *  - "New Chat" button to clear history and start fresh
+ *  - Auto-scroll to latest message
+ *  - Typing indicator while waiting for AI response
+ *  - Graceful fallback when the AI service is unavailable
+ */
 "use client";
 
 import { useState, useRef, useEffect, Suspense } from "react";
@@ -22,10 +35,12 @@ const suggestions = [
   "Show critical priority requests",
 ];
 
+/** Chat interface with sessionStorage-backed message history. */
 function ChatContent() {
   const searchParams = useSearchParams();
   const managerId = searchParams.get("manager");
 
+  // Separate chat histories for each manager context (or "admin" for aggregate view)
   const storageKey = `chat_messages_${managerId || "admin"}`;
 
   const [messages, setMessages] = useState<Message[]>(() => {

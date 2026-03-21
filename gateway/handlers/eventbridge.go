@@ -1,3 +1,15 @@
+// File: eventbridge.go
+// Implements timer-based scheduled tasks that run as background goroutines
+// inside the gateway process. These replace Python cron jobs and provide:
+//   - Summarization (every 15 min): detects unsummarized RequisitionChange
+//     records and calls the AI service to generate natural-language summaries.
+//   - Anomaly scan (every hour): iterates all 5 categories, calls the AI
+//     service for anomaly detection, deduplicates results via the Python
+//     dedup endpoint, and creates in-app notifications + WebSocket broadcasts
+//     for genuinely new anomalies.
+//
+// Both tasks publish success/failure/duration metrics to CloudWatch and
+// support graceful shutdown via context cancellation.
 package handlers
 
 import (

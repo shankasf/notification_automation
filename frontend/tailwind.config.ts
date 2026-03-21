@@ -1,3 +1,8 @@
+/**
+ * Tailwind CSS configuration — extends the default theme with MetaSource's
+ * custom color palette (primary blue scale based on Meta's brand blue #0668E1)
+ * and Inter font family.
+ */
 import type { Config } from "tailwindcss";
 
 const config: Config = {

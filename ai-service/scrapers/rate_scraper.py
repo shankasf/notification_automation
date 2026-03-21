@@ -1,3 +1,14 @@
+"""Market rate scraper entry point.
+
+In production this would call external salary APIs (Glassdoor, LinkedIn,
+Levels.fyi, etc.) to collect current contractor market rates by role and
+location. Since those APIs require authentication and rate-limit management,
+this module currently delegates to the data_generator which produces realistic
+synthetic data that is structurally identical to real scraped results.
+
+Called by the /api/ai/scrape endpoint.
+"""
+
 import time
 
 from logging_config import get_logger

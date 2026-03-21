@@ -1,3 +1,7 @@
+// File: managers.go
+// Provides the admin-only GET /api/managers endpoint that returns all sourcing
+// managers with aggregated metrics (total open requisitions, headcount gap,
+// unread notifications). This powers the admin dashboard's manager overview panel.
 package handlers
 
 import (
@@ -8,6 +12,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// GetManagers returns all sourcing managers with computed summaries.
+// The query uses LEFT JOINs with subqueries so that managers with zero
+// requisitions or zero unread notifications still appear in the results.
 func GetManagers(c *gin.Context) {
 	rows, err := db.DB.Query(`
 		SELECT m.id, m.name, m.email, m.category, m."avatarUrl",
@@ -58,6 +65,7 @@ func GetManagers(c *gin.Context) {
 		managers = append(managers, m)
 	}
 
+	// Ensure JSON response is always an array, never null
 	if managers == nil {
 		managers = []gin.H{}
 	}

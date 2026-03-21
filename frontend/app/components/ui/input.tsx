@@ -1,3 +1,4 @@
+/** Reusable Input component (shadcn/ui) — styled text input with focus ring. */
 import * as React from "react";
 import { cn } from "@/lib/utils";
 

@@ -1,3 +1,15 @@
+/**
+ * Notifications API route.
+ *
+ * GET /api/notifications — paginated list of notifications with optional filters
+ *   (managerId, type, unreadOnly). Used by the notifications page and by the
+ *   dashboard layout to get the unread count for the bell badge.
+ *
+ * PUT /api/notifications — marks notifications as read. Accepts either:
+ *   - { ids: string[] } to mark specific notifications
+ *   - { markAll: true, managerId?: string } to bulk-mark all as read
+ *   Called when a user clicks a notification or presses "Mark All Read".
+ */
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { Prisma, NotificationType } from "@prisma/client";

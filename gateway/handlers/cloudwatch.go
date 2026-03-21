@@ -1,3 +1,11 @@
+// File: cloudwatch.go
+// Integrates with AWS CloudWatch for operational observability. Provides:
+//   - PublishMetric: emits custom metrics (SQS processing duration, task outcomes)
+//   - PublishSQSProcessingMetric: convenience wrapper for consumer metrics
+//   - CreateAlarms: idempotently creates DLQ-not-empty and queue-backlog alarms
+//     that fire SNS notifications to the admin topic
+//   - GetQueueDepths: polls all 6 SQS queues for current message counts
+//     (used by the /api/debug/stats endpoint)
 package handlers
 
 import (
@@ -64,6 +72,7 @@ func PublishMetric(namespace, metricName string, value float64, unit cwtypes.Sta
 		return
 	}
 
+	// Short timeout — metric publishing should never block request processing
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -215,6 +224,7 @@ func GetQueueDepths() map[string]int {
 	}
 
 	depths := make(map[string]int, len(queues))
+	// 10s timeout covers all 6 GetQueueAttributes calls sequentially
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -230,7 +240,7 @@ func GetQueueDepths() map[string]int {
 		})
 		if err != nil {
 			slog.Error("cw_queue_depth_error", "queue", name, "error", err)
-			depths[name] = -1
+			depths[name] = -1 // -1 signals an error fetching this queue's depth
 			continue
 		}
 

@@ -1,3 +1,4 @@
+/** Reusable Tabs component (shadcn/ui) — built on Radix UI Tabs primitive. */
 "use client";
 
 import * as React from "react";

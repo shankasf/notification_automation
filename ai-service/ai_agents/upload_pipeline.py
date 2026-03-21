@@ -1,3 +1,20 @@
+"""Multi-agent data-upload pipeline orchestrator.
+
+Coordinates the four-stage pipeline that turns a raw uploaded file into
+validated Requisition rows in PostgreSQL:
+
+  1. **Parse** -- detect file format and extract raw records (upload_parser)
+  2. **Clean** -- normalize fields via LLM in parallel batches (upload_cleaner)
+  3. **Validate** -- enforce Pydantic schema constraints (upload_models)
+  4. **Upsert** -- insert valid records and create RequisitionChange audit rows
+
+Progress updates are broadcast to the Go gateway at each stage so the
+frontend can show real-time status via WebSocket.
+
+After insertion, in-app Notifications are created for the sourcing managers
+of affected categories.
+"""
+
 import os
 import time
 import asyncio
@@ -61,10 +78,11 @@ async def broadcast_progress(
 
 
 def generate_requisition_id(category: str, conn, cat_offset: int = 0) -> str:
-    """Generate the next requisition ID for a category (e.g. REQ-ENG-042).
+    """Generate the next sequential requisition ID for a category (e.g. REQ-ENG-042).
 
-    cat_offset accounts for records already inserted in this batch but not yet
-    visible to the MAX query (same transaction or concurrent uploads).
+    Queries the MAX numeric suffix currently in the table, then adds 1 plus
+    cat_offset. cat_offset accounts for records already inserted in this batch
+    but not yet visible to the MAX query (same transaction or concurrent uploads).
     """
     short = CATEGORY_SHORT.get(category, "GEN")
     cur = conn.cursor()
@@ -78,11 +96,13 @@ def generate_requisition_id(category: str, conn, cat_offset: int = 0) -> str:
 
 
 def upsert_record(validated: CleanedRequisition, conn, cat_created_counts: dict[str, int] | None = None) -> str:
-    """Insert a validated record into the Requisition table. Returns requisitionId."""
+    """Insert a validated record into the Requisition table and create an
+    audit RequisitionChange row. Returns the generated requisitionId."""
     cat_offset = (cat_created_counts or {}).get(validated.category, 0)
     req_id = generate_requisition_id(validated.category, conn, cat_offset)
     rid = str(uuid.uuid4())
     now = datetime.now(timezone.utc)
+    # Default budget = hourly rate * headcount * 2080 (standard work hours/year)
     budget = validated.budgetAllocated or (
         validated.billRateHourly * validated.headcountNeeded * 2080
     )
@@ -219,9 +239,12 @@ async def run_pipeline(
         job_id, "uploading", records, "Inserting records into database..."
     )
 
+    # Insert each validated record individually so a single bad row
+    # doesn't roll back the entire batch. On failure, reconnect and
+    # continue with the next record.
     conn = _get_conn()
     created = 0
-    cat_created_counts: dict[str, int] = {}
+    cat_created_counts: dict[str, int] = {}  # tracks per-category insert count for ID generation
     try:
         for r in records:
             if r.status != RecordStatus.VALIDATED:
@@ -238,7 +261,7 @@ async def run_pipeline(
                 r.status = RecordStatus.FAILED
                 r.error = f"DB insert failed: {str(e)}"
                 conn.rollback()
-                # Reconnect for next record
+                # Reconnect for next record in case the connection is in a bad state
                 try:
                     conn.close()
                 except Exception:
@@ -248,6 +271,7 @@ async def run_pipeline(
         conn.close()
 
     # -- Notify managers for affected categories --
+    # Create an in-app Notification for each category that received new records
     affected_categories = set()
     for r in records:
         if r.status == RecordStatus.UPLOADED and r.cleaned_data:

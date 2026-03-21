@@ -1,3 +1,8 @@
+// File: notifications.go
+// Provides endpoints for listing and marking notifications as read.
+// Notifications are created by various subsystems (CSV import, anomaly detection,
+// requisition CRUD) and stored in the Notification table. Each notification
+// belongs to a specific manager via managerId.
 package handlers
 
 import (
@@ -12,6 +17,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// ListNotifications returns a paginated list of notifications, optionally
+// filtered by managerId, notification type, and unread-only flag.
 func ListNotifications(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "25"))
@@ -96,11 +103,15 @@ func ListNotifications(c *gin.Context) {
 	})
 }
 
+// MarkReadBody supports two modes: mark specific notifications by ID, or
+// mark all notifications as read (optionally scoped to a manager).
 type MarkReadBody struct {
 	IDs     []string `json:"ids"`
 	MarkAll bool     `json:"markAll"`
 }
 
+// MarkNotificationsRead handles PUT /api/notifications. Supports bulk mark-read
+// by IDs or mark-all (scoped to a manager if managerId query param is provided).
 func MarkNotificationsRead(c *gin.Context) {
 	var body MarkReadBody
 	if err := c.ShouldBindJSON(&body); err != nil {
@@ -109,11 +120,12 @@ func MarkNotificationsRead(c *gin.Context) {
 	}
 
 	if body.MarkAll {
+		// When managerId is present, scope the update to that manager's notifications.
+		// Otherwise (admin view), mark all unread notifications system-wide.
 		managerID := c.Query("managerId")
 		if managerID != "" {
 			db.DB.Exec(`UPDATE "Notification" SET "isRead" = true WHERE "managerId" = $1`, managerID)
 		} else {
-			// Admin view: mark all visible notifications as read
 			db.DB.Exec(`UPDATE "Notification" SET "isRead" = true WHERE "isRead" = false`)
 		}
 		c.JSON(http.StatusOK, gin.H{"updated": true})
@@ -125,6 +137,7 @@ func MarkNotificationsRead(c *gin.Context) {
 		return
 	}
 
+	// Build dynamic IN clause with positional parameters to avoid SQL injection
 	placeholders := make([]string, len(body.IDs))
 	args := make([]interface{}, len(body.IDs))
 	for i, id := range body.IDs {

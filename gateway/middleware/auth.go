@@ -1,3 +1,12 @@
+// File: auth.go
+// Implements JWT-based authentication and role-based authorization middleware.
+// The gateway validates NextAuth-issued JWTs (HS256, signed with NEXTAUTH_SECRET),
+// then looks up the user's role and manager association in the UserRole table.
+// Three context values are set for downstream use: user_email, user_role, and
+// manager_id. RequireRole provides route-group authorization by allowed role names.
+//
+// ValidateTokenString is a standalone function used by the WebSocket handler,
+// where the JWT arrives as a query parameter instead of a header/cookie.
 package middleware
 
 import (
@@ -31,7 +40,8 @@ func AuthMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		// Parse and validate the JWT using HS256
+		// Parse and validate the JWT. Explicitly restrict to HS256 to prevent
+		// algorithm-switching attacks (e.g., "none" algorithm bypass).
 		token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {
 			if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
 				return nil, jwt.ErrSignatureInvalid
@@ -118,6 +128,8 @@ func AuthMiddleware() gin.HandlerFunc {
 // RequireRole returns middleware that restricts access to users with one of the
 // specified roles. It must be placed AFTER AuthMiddleware in the chain.
 func RequireRole(roles ...string) gin.HandlerFunc {
+	// Pre-compute a set for O(1) role lookups; normalize to lowercase
+	// so "Admin", "ADMIN", and "admin" are all treated identically.
 	allowed := make(map[string]bool, len(roles))
 	for _, r := range roles {
 		allowed[strings.ToLower(r)] = true
