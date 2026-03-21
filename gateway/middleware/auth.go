@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"database/sql"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -177,6 +178,9 @@ func extractToken(c *gin.Context) string {
 // as a query parameter rather than a header/cookie.
 func ValidateTokenString(tokenStr string) (email, name, role, managerID string, err error) {
 	secret := os.Getenv("NEXTAUTH_SECRET")
+	if secret == "" {
+		return "", "", "", "", fmt.Errorf("NEXTAUTH_SECRET not configured")
+	}
 
 	token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {

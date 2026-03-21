@@ -12,6 +12,7 @@ import os
 import psycopg2
 import threading
 import time
+from decimal import Decimal
 
 from logging_config import get_logger
 
@@ -29,12 +30,14 @@ class DataClassifier:
         """Load classification rules from the DataClassification database table."""
         try:
             conn = psycopg2.connect(os.environ["DATABASE_URL"])
-            cur = conn.cursor()
-            cur.execute(
-                'SELECT "tableName", "fieldName", tier FROM "DataClassification"'
-            )
-            rows = cur.fetchall()
-            conn.close()
+            try:
+                cur = conn.cursor()
+                cur.execute(
+                    'SELECT "tableName", "fieldName", tier FROM "DataClassification"'
+                )
+                rows = cur.fetchall()
+            finally:
+                conn.close()
 
             new_rules: dict[tuple[str, str], str] = {}
             for table_name, field_name, tier in rows:
@@ -53,13 +56,14 @@ class DataClassifier:
                 "classification_rules_load_failed",
                 extra={"extra_data": {"error": str(e)}},
             )
-            # Keep using existing rules if refresh fails
-            with self._lock:
-                self._last_refresh = time.time()
+            # Keep using existing rules if refresh fails; do NOT update
+            # _last_refresh so retries happen on next request
 
     def _ensure_fresh(self):
         """Refresh rules if stale (older than refresh_interval)."""
-        if time.time() - self._last_refresh > self._refresh_interval:
+        with self._lock:
+            stale = time.time() - self._last_refresh > self._refresh_interval
+        if stale:
             self._load_rules()
 
     def filter_for_llm(
@@ -115,14 +119,14 @@ class DataClassifier:
 
         if field in ("headcountNeeded", "headcountFilled"):
             # Convert to range: 5 -> "1-10", 15 -> "10-20"
-            if isinstance(value, (int, float)):
+            if isinstance(value, (int, float, Decimal)):
                 n = int(value)
                 low = (n // 10) * 10
                 return f"{low}-{low + 10}"
 
         if field in ("budgetAllocated", "budgetSpent", "billRate", "avgRate", "totalSpend"):
             # Convert dollar amounts to order-of-magnitude ranges
-            if isinstance(value, (int, float)):
+            if isinstance(value, (int, float, Decimal)):
                 v = float(value)
                 if v < 100:
                     return "$0-$100"

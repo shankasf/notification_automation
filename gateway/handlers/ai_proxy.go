@@ -4,6 +4,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -56,7 +57,7 @@ func GenericProxyHandler(pythonURL string) gin.HandlerFunc {
 		}
 		req.Header.Set("Content-Type", "application/json")
 
-		client := &http.Client{}
+		client := &http.Client{Timeout: 60 * time.Second}
 		resp, err := client.Do(req)
 		if err != nil {
 			slog.Error("proxy_request_error", "error", err, "target", targetURL, "request_id", reqID)

@@ -23,12 +23,14 @@ import (
 //   - On handler error: message is NOT deleted — SQS will retry, then move to DLQ
 //     after maxReceiveCount (3) failures.
 func PollQueue(ctx context.Context, queueURL string, handler func(body string) error, maxConcurrency int) {
+	var inFlight sync.WaitGroup
 	sem := make(chan struct{}, maxConcurrency)
 
 	for {
 		select {
 		case <-ctx.Done():
 			slog.Info("sqs_consumer_stopping", "queue", queueURL)
+			inFlight.Wait()
 			return
 		default:
 		}
@@ -41,12 +43,14 @@ func PollQueue(ctx context.Context, queueURL string, handler func(body string) e
 		if err != nil {
 			// Context cancellation is expected during shutdown
 			if ctx.Err() != nil {
+				inFlight.Wait()
 				return
 			}
 			slog.Error("sqs_receive_error", "queue", queueURL, "error", err)
 			// Back off briefly on receive errors to avoid tight-loop spam
 			select {
 			case <-ctx.Done():
+				inFlight.Wait()
 				return
 			case <-time.After(5 * time.Second):
 			}
@@ -55,8 +59,10 @@ func PollQueue(ctx context.Context, queueURL string, handler func(body string) e
 
 		for _, msg := range out.Messages {
 			sem <- struct{}{} // acquire semaphore slot
+			inFlight.Add(1)
 
 			go func(messageBody, receiptHandle string) {
+				defer inFlight.Done()
 				defer func() { <-sem }() // release semaphore slot
 
 				if err := handler(messageBody); err != nil {

@@ -146,7 +146,7 @@ def send_manager_notification(manager_id: str, subject: str, body: str, notif_ty
         },
     )
     import psycopg2
-    conn = psycopg2.connect(os.environ.get("DATABASE_URL", ""))
+    conn = psycopg2.connect(os.environ["DATABASE_URL"])
     try:
         cur = conn.cursor()
         cur.execute('SELECT name, email FROM "SourcingManager" WHERE id = %s', (manager_id,))

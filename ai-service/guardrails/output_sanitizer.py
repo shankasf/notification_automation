@@ -98,10 +98,13 @@ def validate_response_scope(response: str, user_category: str | None) -> str:
     if not user_category:
         return response
 
+    # Normalize to uppercase so header case doesn't matter
+    user_cat_upper = user_category.upper() if user_category else ""
+
     # Build list of other categories
     other_categories: list[str] = []
     for cat_enum, cat_names in _CATEGORY_NAMES.items():
-        if cat_enum != user_category:
+        if cat_enum != user_cat_upper:
             other_categories.extend(cat_names)
 
     if not other_categories:

@@ -29,20 +29,32 @@ func ListRequisitions(c *gin.Context) {
 	status := c.Query("status")
 	priority := c.Query("priority")
 	search := c.Query("search")
-	managerID := c.Query("managerId")
 	sort := c.DefaultQuery("sort", "updatedAt_desc")
 
 	conditions := []string{}
 	args := []interface{}{}
 	argIdx := 1
 
-	// When managerId is present, the manager's category takes precedence over the explicit filter
-	if managerID != "" {
-		var cat string
-		db.DB.QueryRow(`SELECT category FROM "SourcingManager" WHERE id = $1`, managerID).Scan(&cat)
-		if cat != "" {
+	// For managers, force their category filter from auth context (ignore user-supplied category)
+	role, _ := c.Get("user_role")
+	roleStr, _ := role.(string)
+	authManagerID, _ := c.Get("manager_id")
+	authManagerIDStr, _ := authManagerID.(string)
+
+	if strings.EqualFold(roleStr, "admin") {
+		// Admins can filter by any category (or see all)
+		if category != "" {
 			conditions = append(conditions, fmt.Sprintf(`category = $%d`, argIdx))
-			args = append(args, cat)
+			args = append(args, category)
+			argIdx++
+		}
+	} else if authManagerIDStr != "" {
+		// Managers: force filter to their own category
+		var managerCat string
+		db.DB.QueryRow(`SELECT category FROM "SourcingManager" WHERE id = $1`, authManagerIDStr).Scan(&managerCat)
+		if managerCat != "" {
+			conditions = append(conditions, fmt.Sprintf(`category = $%d`, argIdx))
+			args = append(args, managerCat)
 			argIdx++
 		}
 	} else if category != "" {
@@ -219,26 +231,28 @@ func getChangedBy(c *gin.Context) string {
 	return "user"
 }
 
-// checkManagerAuth verifies that a manager (identified by managerId query param) is authorized
-// to modify a requisition in the given category. Admins (no managerId) can edit anything.
-// Returns true if authorized.
+// checkManagerAuth verifies that the authenticated user is authorized to
+// modify a requisition in the given category. Uses the JWT-derived role and
+// managerId from the Gin context — never user-supplied query params.
 func checkManagerAuth(c *gin.Context, reqCategory string) bool {
-	managerID := c.Query("managerId")
-	if managerID == "" {
-		return true // admin can edit anything
+	role, _ := c.Get("user_role")
+	if role == "ADMIN" || role == "admin" {
+		return true // admins can access everything
 	}
-	var cat string
-	err := db.DB.QueryRow(`SELECT category FROM "SourcingManager" WHERE id = $1`, managerID).Scan(&cat)
-	if err != nil || cat == "" {
-		c.JSON(http.StatusForbidden, gin.H{
-			"error": fmt.Sprintf("Unknown manager ID: %s", managerID),
-		})
+	// Managers: look up their category and verify it matches
+	managerID, _ := c.Get("manager_id")
+	if managerID == nil || managerID == "" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Manager ID not found in session"})
 		return false
 	}
-	if cat != reqCategory {
-		c.JSON(http.StatusForbidden, gin.H{
-			"error": fmt.Sprintf("Manager %s can only edit %s hiring requests", managerID, cat),
-		})
+	var managerCategory string
+	err := db.DB.QueryRow(`SELECT category FROM "SourcingManager" WHERE id = $1`, managerID).Scan(&managerCategory)
+	if err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Could not verify manager category"})
+		return false
+	}
+	if managerCategory != reqCategory {
+		c.JSON(http.StatusForbidden, gin.H{"error": "You can only modify requisitions in your category"})
 		return false
 	}
 	return true

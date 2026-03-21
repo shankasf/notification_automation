@@ -203,6 +203,18 @@ async def chat(request: ChatRequest, request_obj: Request):
     user_role = request_obj.headers.get("x-user-role", "")
     user_category = request_obj.headers.get("x-manager-category", "")
 
+    # Check banned cross-category topics (managers only)
+    from guardrails.prompt_guard import check_banned_topics
+    banned, ban_reason = check_banned_topics(request.message, user_category or None)
+    if banned:
+        logger.warning("banned_topic_blocked", extra={"extra_data": {"reason": ban_reason}})
+        return JSONResponse(status_code=400, content={"error": f"Query blocked: {ban_reason}"})
+
+    # Redact PII from user message before sending to LLM
+    if has_pii(request.message):
+        logger.warning("pii_in_chat_message", extra={"extra_data": {"user": user_email}})
+        request.message = redact_text(request.message)
+
     try:
         with trace("Chat Query", group_id=session_id):
             with custom_span("chat_endpoint"):

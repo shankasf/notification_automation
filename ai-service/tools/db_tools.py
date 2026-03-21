@@ -10,6 +10,15 @@ from guardrails.data_classifier import classifier
 logger = get_logger("tools.db")
 
 
+def _safe_float(val, default=0.0):
+    if val is None:
+        return default
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return default
+
+
 def get_conn():
     logger.debug("db_connection_opening")
     return psycopg2.connect(os.environ["DATABASE_URL"])
@@ -43,35 +52,37 @@ def query_requisitions(
     )
     start = time.time()
     conn = get_conn()
-    cur = conn.cursor()
-    conditions = []
-    params = []
-    if category:
-        conditions.append("category = %s")
-        params.append(category)
-    if status:
-        conditions.append("status = %s")
-        params.append(status)
-    if priority:
-        conditions.append("priority = %s")
-        params.append(priority)
-    if vendor:
-        conditions.append("vendor ILIKE %s")
-        params.append(f"%{vendor}%")
-    if location:
-        conditions.append("location ILIKE %s")
-        params.append(f"%{location}%")
+    try:
+        cur = conn.cursor()
+        conditions = []
+        params = []
+        if category:
+            conditions.append("category = %s")
+            params.append(category)
+        if status:
+            conditions.append("status = %s")
+            params.append(status)
+        if priority:
+            conditions.append("priority = %s")
+            params.append(priority)
+        if vendor:
+            conditions.append("vendor ILIKE %s")
+            params.append(f"%{vendor}%")
+        if location:
+            conditions.append("location ILIKE %s")
+            params.append(f"%{location}%")
 
-    where = "WHERE " + " AND ".join(conditions) if conditions else ""
-    cur.execute(
-        f"""SELECT "requisitionId", "roleTitle", category, status, priority, vendor, location,
-                    "billRateHourly", "headcountNeeded", "headcountFilled", "budgetAllocated", "budgetSpent"
-                    FROM "Requisition" {where} ORDER BY "updatedAt" DESC LIMIT %s""",
-        params + [limit],
-    )
+        where = "WHERE " + " AND ".join(conditions) if conditions else ""
+        cur.execute(
+            f"""SELECT "requisitionId", "roleTitle", category, status, priority, vendor, location,
+                        "billRateHourly", "headcountNeeded", "headcountFilled", "budgetAllocated", "budgetSpent"
+                        FROM "Requisition" {where} ORDER BY "updatedAt" DESC LIMIT %s""",
+            params + [limit],
+        )
 
-    rows = cur.fetchall()
-    conn.close()
+        rows = cur.fetchall()
+    finally:
+        conn.close()
 
     result = [
         {
@@ -82,11 +93,11 @@ def query_requisitions(
             "priority": r[4],
             "vendor": r[5],
             "location": r[6],
-            "billRate": float(r[7]),
+            "billRate": _safe_float(r[7]),
             "headcountNeeded": r[8],
             "headcountFilled": r[9],
-            "budgetAllocated": float(r[10]),
-            "budgetSpent": float(r[11]),
+            "budgetAllocated": _safe_float(r[10]),
+            "budgetSpent": _safe_float(r[11]),
         }
         for r in rows
     ]
@@ -114,33 +125,35 @@ def get_manager_stats(manager_category: str = None) -> str:
     )
     start = time.time()
     conn = get_conn()
-    cur = conn.cursor()
-    if manager_category:
-        cur.execute(
-            """SELECT category, COUNT(*),
-                        SUM("headcountNeeded"), SUM("headcountFilled"),
-                        SUM("budgetAllocated"), SUM("budgetSpent"),
-                        AVG("billRateHourly"),
-                        COUNT(*) FILTER (WHERE priority = 'CRITICAL'),
-                        COUNT(*) FILTER (WHERE status = 'OPEN' OR status = 'SOURCING')
-                        FROM "Requisition"
-                        WHERE category = %s
-                        GROUP BY category""",
-            (manager_category,),
-        )
-    else:
-        cur.execute(
-            """SELECT category, COUNT(*),
-                        SUM("headcountNeeded"), SUM("headcountFilled"),
-                        SUM("budgetAllocated"), SUM("budgetSpent"),
-                        AVG("billRateHourly"),
-                        COUNT(*) FILTER (WHERE priority = 'CRITICAL'),
-                        COUNT(*) FILTER (WHERE status = 'OPEN' OR status = 'SOURCING')
-                        FROM "Requisition"
-                        GROUP BY category"""
-        )
-    rows = cur.fetchall()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        if manager_category:
+            cur.execute(
+                """SELECT category, COUNT(*),
+                            SUM("headcountNeeded"), SUM("headcountFilled"),
+                            SUM("budgetAllocated"), SUM("budgetSpent"),
+                            AVG("billRateHourly"),
+                            COUNT(*) FILTER (WHERE priority = 'CRITICAL'),
+                            COUNT(*) FILTER (WHERE status = 'OPEN' OR status = 'SOURCING')
+                            FROM "Requisition"
+                            WHERE category = %s
+                            GROUP BY category""",
+                (manager_category,),
+            )
+        else:
+            cur.execute(
+                """SELECT category, COUNT(*),
+                            SUM("headcountNeeded"), SUM("headcountFilled"),
+                            SUM("budgetAllocated"), SUM("budgetSpent"),
+                            AVG("billRateHourly"),
+                            COUNT(*) FILTER (WHERE priority = 'CRITICAL'),
+                            COUNT(*) FILTER (WHERE status = 'OPEN' OR status = 'SOURCING')
+                            FROM "Requisition"
+                            GROUP BY category"""
+            )
+        rows = cur.fetchall()
+    finally:
+        conn.close()
 
     result = [
         {
@@ -148,9 +161,9 @@ def get_manager_stats(manager_category: str = None) -> str:
             "totalReqs": r[1],
             "headcountNeeded": r[2],
             "headcountFilled": r[3],
-            "budgetAllocated": float(r[4]),
-            "budgetSpent": float(r[5]),
-            "avgRate": float(r[6]),
+            "budgetAllocated": _safe_float(r[4]),
+            "budgetSpent": _safe_float(r[5]),
+            "avgRate": _safe_float(r[6]),
             "criticalCount": r[7],
             "openSourcingCount": r[8],
         }
@@ -180,36 +193,38 @@ def get_budget_overview(category: str = None) -> str:
     )
     start = time.time()
     conn = get_conn()
-    cur = conn.cursor()
-    if category:
-        cur.execute(
-            """SELECT category,
-                        SUM("budgetAllocated") as allocated,
-                        SUM("budgetSpent") as spent,
-                        ROUND((SUM("budgetSpent") / NULLIF(SUM("budgetAllocated"), 0) * 100)::numeric, 1) as utilization
-                        FROM "Requisition"
-                        WHERE category = %s
-                        GROUP BY category ORDER BY utilization DESC""",
-            (category,),
-        )
-    else:
-        cur.execute(
-            """SELECT category,
-                        SUM("budgetAllocated") as allocated,
-                        SUM("budgetSpent") as spent,
-                        ROUND((SUM("budgetSpent") / NULLIF(SUM("budgetAllocated"), 0) * 100)::numeric, 1) as utilization
-                        FROM "Requisition"
-                        GROUP BY category ORDER BY utilization DESC"""
-        )
-    rows = cur.fetchall()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        if category:
+            cur.execute(
+                """SELECT category,
+                            SUM("budgetAllocated") as allocated,
+                            SUM("budgetSpent") as spent,
+                            ROUND((SUM("budgetSpent") / NULLIF(SUM("budgetAllocated"), 0) * 100)::numeric, 1) as utilization
+                            FROM "Requisition"
+                            WHERE category = %s
+                            GROUP BY category ORDER BY utilization DESC""",
+                (category,),
+            )
+        else:
+            cur.execute(
+                """SELECT category,
+                            SUM("budgetAllocated") as allocated,
+                            SUM("budgetSpent") as spent,
+                            ROUND((SUM("budgetSpent") / NULLIF(SUM("budgetAllocated"), 0) * 100)::numeric, 1) as utilization
+                            FROM "Requisition"
+                            GROUP BY category ORDER BY utilization DESC"""
+            )
+        rows = cur.fetchall()
+    finally:
+        conn.close()
 
     result = [
         {
             "category": r[0],
-            "allocated": float(r[1]),
-            "spent": float(r[2]),
-            "utilization": float(r[3]) if r[3] else 0,
+            "allocated": _safe_float(r[1]),
+            "spent": _safe_float(r[2]),
+            "utilization": _safe_float(r[3]),
         }
         for r in rows
     ]
@@ -237,31 +252,33 @@ def get_headcount_gaps(category: str = None) -> str:
     )
     start = time.time()
     conn = get_conn()
-    cur = conn.cursor()
-    if category:
-        cur.execute(
-            """SELECT "roleTitle", category,
-                        SUM("headcountNeeded") as needed, SUM("headcountFilled") as filled,
-                        SUM("headcountNeeded") - SUM("headcountFilled") as gap
-                        FROM "Requisition"
-                        WHERE category = %s
-                        GROUP BY "roleTitle", category
-                        HAVING SUM("headcountNeeded") > SUM("headcountFilled")
-                        ORDER BY gap DESC LIMIT 20""",
-            (category,),
-        )
-    else:
-        cur.execute(
-            """SELECT "roleTitle", category,
-                        SUM("headcountNeeded") as needed, SUM("headcountFilled") as filled,
-                        SUM("headcountNeeded") - SUM("headcountFilled") as gap
-                        FROM "Requisition"
-                        GROUP BY "roleTitle", category
-                        HAVING SUM("headcountNeeded") > SUM("headcountFilled")
-                        ORDER BY gap DESC LIMIT 20"""
-        )
-    rows = cur.fetchall()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        if category:
+            cur.execute(
+                """SELECT "roleTitle", category,
+                            SUM("headcountNeeded") as needed, SUM("headcountFilled") as filled,
+                            SUM("headcountNeeded") - SUM("headcountFilled") as gap
+                            FROM "Requisition"
+                            WHERE category = %s
+                            GROUP BY "roleTitle", category
+                            HAVING SUM("headcountNeeded") > SUM("headcountFilled")
+                            ORDER BY gap DESC LIMIT 20""",
+                (category,),
+            )
+        else:
+            cur.execute(
+                """SELECT "roleTitle", category,
+                            SUM("headcountNeeded") as needed, SUM("headcountFilled") as filled,
+                            SUM("headcountNeeded") - SUM("headcountFilled") as gap
+                            FROM "Requisition"
+                            GROUP BY "roleTitle", category
+                            HAVING SUM("headcountNeeded") > SUM("headcountFilled")
+                            ORDER BY gap DESC LIMIT 20"""
+            )
+        rows = cur.fetchall()
+    finally:
+        conn.close()
 
     result = [
         {
@@ -297,38 +314,40 @@ def get_vendor_analysis(category: str = None) -> str:
     )
     start = time.time()
     conn = get_conn()
-    cur = conn.cursor()
-    if category:
-        cur.execute(
-            """SELECT vendor, category, COUNT(*) as req_count,
-                        AVG("billRateHourly") as avg_rate,
-                        SUM("headcountFilled") as total_filled,
-                        SUM("budgetSpent") as total_spend
-                        FROM "Requisition"
-                        WHERE category = %s
-                        GROUP BY vendor, category ORDER BY req_count DESC""",
-            (category,),
-        )
-    else:
-        cur.execute(
-            """SELECT vendor, category, COUNT(*) as req_count,
-                        AVG("billRateHourly") as avg_rate,
-                        SUM("headcountFilled") as total_filled,
-                        SUM("budgetSpent") as total_spend
-                        FROM "Requisition"
-                        GROUP BY vendor, category ORDER BY req_count DESC"""
-        )
-    rows = cur.fetchall()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        if category:
+            cur.execute(
+                """SELECT vendor, category, COUNT(*) as req_count,
+                            AVG("billRateHourly") as avg_rate,
+                            SUM("headcountFilled") as total_filled,
+                            SUM("budgetSpent") as total_spend
+                            FROM "Requisition"
+                            WHERE category = %s
+                            GROUP BY vendor, category ORDER BY req_count DESC""",
+                (category,),
+            )
+        else:
+            cur.execute(
+                """SELECT vendor, category, COUNT(*) as req_count,
+                            AVG("billRateHourly") as avg_rate,
+                            SUM("headcountFilled") as total_filled,
+                            SUM("budgetSpent") as total_spend
+                            FROM "Requisition"
+                            GROUP BY vendor, category ORDER BY req_count DESC"""
+            )
+        rows = cur.fetchall()
+    finally:
+        conn.close()
 
     result = [
         {
             "vendor": r[0],
             "category": r[1],
             "reqCount": r[2],
-            "avgRate": float(r[3]),
+            "avgRate": _safe_float(r[3]),
             "totalFilled": r[4],
-            "totalSpend": float(r[5]),
+            "totalSpend": _safe_float(r[5]),
         }
         for r in rows
     ]
@@ -357,27 +376,29 @@ def get_recent_changes(category: str = None, hours: int = 24) -> str:
     )
     start = time.time()
     conn = get_conn()
-    cur = conn.cursor()
-    conditions = ['rc."createdAt" >= NOW() - (%s * INTERVAL \'1 hour\')']
-    params: list = [hours]
-    if category:
-        conditions.append("r.category = %s")
-        params.append(category)
+    try:
+        cur = conn.cursor()
+        conditions = ['rc."createdAt" >= NOW() - (%s * INTERVAL \'1 hour\')']
+        params: list = [hours]
+        if category:
+            conditions.append("r.category = %s")
+            params.append(category)
 
-    where = "WHERE " + " AND ".join(conditions)
-    cur.execute(
-        f"""SELECT rc.id, rc."changeType", rc."fieldChanged", rc."oldValue", rc."newValue",
-                   rc."changedBy", rc.summary, rc."createdAt",
-                   r."requisitionId", r."roleTitle", r.category
-            FROM "RequisitionChange" rc
-            JOIN "Requisition" r ON rc."requisitionId" = r.id
-            {where}
-            ORDER BY rc."createdAt" DESC
-            LIMIT 50""",
-        params,
-    )
-    rows = cur.fetchall()
-    conn.close()
+        where = "WHERE " + " AND ".join(conditions)
+        cur.execute(
+            f"""SELECT rc.id, rc."changeType", rc."fieldChanged", rc."oldValue", rc."newValue",
+                       rc."changedBy", rc.summary, rc."createdAt",
+                       r."requisitionId", r."roleTitle", r.category
+                FROM "RequisitionChange" rc
+                JOIN "Requisition" r ON rc."requisitionId" = r.id
+                {where}
+                ORDER BY rc."createdAt" DESC
+                LIMIT 50""",
+            params,
+        )
+        rows = cur.fetchall()
+    finally:
+        conn.close()
 
     result = [
         {
@@ -418,33 +439,35 @@ def get_market_rates(role_title: str = None, category: str = None) -> str:
     )
     start = time.time()
     conn = get_conn()
-    cur = conn.cursor()
-    conditions = []
-    params = []
-    if role_title:
-        conditions.append('"roleTitle" ILIKE %s')
-        params.append(f"%{role_title}%")
-    if category:
-        conditions.append("category = %s")
-        params.append(category)
+    try:
+        cur = conn.cursor()
+        conditions = []
+        params = []
+        if role_title:
+            conditions.append('"roleTitle" ILIKE %s')
+            params.append(f"%{role_title}%")
+        if category:
+            conditions.append("category = %s")
+            params.append(category)
 
-    where = "WHERE " + " AND ".join(conditions) if conditions else ""
-    cur.execute(
-        f"""SELECT "roleTitle", category, location, "minRate", "maxRate", "medianRate", source
-                    FROM "MarketRate" {where} ORDER BY "scrapedAt" DESC LIMIT 50""",
-        params,
-    )
-    rows = cur.fetchall()
-    conn.close()
+        where = "WHERE " + " AND ".join(conditions) if conditions else ""
+        cur.execute(
+            f"""SELECT "roleTitle", category, location, "minRate", "maxRate", "medianRate", source
+                        FROM "MarketRate" {where} ORDER BY "scrapedAt" DESC LIMIT 50""",
+            params,
+        )
+        rows = cur.fetchall()
+    finally:
+        conn.close()
 
     result = [
         {
             "roleTitle": r[0],
             "category": r[1],
             "location": r[2],
-            "minRate": float(r[3]),
-            "maxRate": float(r[4]),
-            "medianRate": float(r[5]),
+            "minRate": _safe_float(r[3]),
+            "maxRate": _safe_float(r[4]),
+            "medianRate": _safe_float(r[5]),
             "source": r[6],
         }
         for r in rows

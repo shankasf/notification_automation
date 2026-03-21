@@ -116,10 +116,14 @@ func (h *Hub) removeConn(managerID string, conn *websocket.Conn) {
 }
 
 func (h *Hub) Broadcast(managerID, msgType string, payload interface{}) {
-	h.broadcast <- BroadcastMsg{
+	select {
+	case h.broadcast <- BroadcastMsg{
 		ManagerID: managerID,
 		Type:      msgType,
 		Payload:   payload,
+	}:
+	default:
+		slog.Warn("websocket_broadcast_dropped", "managerId", managerID, "event", msgType)
 	}
 }
 

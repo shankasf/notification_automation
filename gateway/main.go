@@ -38,12 +38,10 @@ func main() {
 	r.Use(middleware.RecoveryMiddleware())
 	r.Use(middleware.RequestLoggingMiddleware())
 	r.Use(middleware.CORSMiddleware())
-	r.Use(middleware.RateLimitMiddleware(100))
 
 	// ── Public routes (no auth) ─────────────────────────────
 	r.GET("/health", handlers.HealthCheck(pythonURL))
 	r.GET("/api/health", handlers.HealthCheck(pythonURL))
-	r.GET("/api/debug/stats", handlers.DebugStats)
 
 	// WebSocket (auth handled inside the handler via token query param)
 	r.GET("/ws/notifications", handlers.HandleWebSocket)
@@ -59,6 +57,7 @@ func main() {
 	admin.Use(middleware.RequireRole("admin"))
 	{
 		admin.GET("/api/managers", handlers.GetManagers)
+		admin.GET("/api/debug/stats", handlers.DebugStats)
 		admin.POST("/api/data-upload", handlers.DataUpload(pythonURL))
 		admin.POST("/api/data-upload/progress", handlers.UploadProgress)
 		admin.POST("/api/sns/setup", handlers.SetupSNS)
