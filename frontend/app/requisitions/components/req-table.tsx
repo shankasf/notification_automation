@@ -127,44 +127,32 @@ export function RequisitionTable({ data, onEdit, onDelete, onInlineUpdate }: Req
       accessorKey: "status",
       header: "Status",
       cell: ({ row }) => {
-        const isEditing =
-          editingCell?.id === row.original.id &&
-          editingCell?.field === "status";
-
-        if (isEditing) {
-          return (
-            <Select
-              value={editValue}
-              onValueChange={(v) => {
-                setEditValue(v);
-                onInlineUpdate(row.original.id, "status", v);
-                setEditingCell(null);
-              }}
-            >
-              <SelectTrigger className="h-7 text-xs w-[120px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {Object.keys(STATUS_COLORS).map((s) => (
-                  <SelectItem key={s} value={s}>
-                    {s}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          );
-        }
-
+        const currentStatus = row.original.status;
+        const colorClass = STATUS_COLORS[currentStatus] || "bg-gray-100 text-gray-800";
         return (
-          <Badge
-            className={`cursor-pointer ${STATUS_COLORS[row.original.status] || "bg-gray-100 text-gray-800"}`}
-            onClick={() => startEditing(row.original.id, "status", row.original.status)}
+          <Select
+            value={currentStatus}
+            onValueChange={(v) => {
+              onInlineUpdate(row.original.id, "status", v);
+            }}
           >
-            {row.original.status}
-          </Badge>
+            <SelectTrigger className={`h-7 text-xs w-[130px] border-0 font-semibold rounded-full px-3 ${colorClass}`}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {Object.keys(STATUS_COLORS).map((s) => (
+                <SelectItem key={s} value={s}>
+                  <span className={`inline-flex items-center gap-1.5`}>
+                    <span className={`w-2 h-2 rounded-full ${STATUS_COLORS[s]?.split(" ")[0] || "bg-gray-100"}`} />
+                    {s}
+                  </span>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         );
       },
-      size: 120,
+      size: 140,
     },
     {
       accessorKey: "priority",

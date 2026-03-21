@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useSession, signIn, signOut } from "next-auth/react";
+import { useWebSocket, type WSMessage } from "@/lib/use-websocket";
 
 const ADMIN_EMAIL = "sagarshankarnusa@gmail.com";
 import {
@@ -52,11 +53,7 @@ export default function HomePage() {
   const userEmail = session?.user?.email || "";
   const isAdmin = userEmail === ADMIN_EMAIL;
 
-  useEffect(() => {
-    if (!session) {
-      setLoading(false);
-      return;
-    }
+  const fetchManagers = useCallback(() => {
     fetch("/api/managers")
       .then((res) => res.json())
       .then((data) => {
@@ -66,11 +63,11 @@ export default function HomePage() {
         // Resolve display name from manager DB, not Google account
         const email = session?.user?.email;
         if (email) {
-          if (email === ADMIN_EMAIL) {
+          const me = data.find((m: ManagerData) => m.email === email);
+          if (me) {
+            setDisplayName(me.name);
+          } else if (email === ADMIN_EMAIL) {
             setDisplayName("Admin");
-          } else {
-            const me = data.find((m: ManagerData) => m.email === email);
-            if (me) setDisplayName(me.name);
           }
         }
 
@@ -86,6 +83,25 @@ export default function HomePage() {
       })
       .catch(() => setLoading(false));
   }, [session, isAdmin, router]);
+
+  useEffect(() => {
+    if (!session) {
+      setLoading(false);
+      return;
+    }
+    fetchManagers();
+  }, [session, fetchManagers]);
+
+  // Real-time updates: refetch manager stats on any WS event
+  const handleWsMessage = useCallback(
+    (msg: WSMessage) => {
+      if (msg.type === "change" || msg.type === "notification" || msg.type === "refresh") {
+        fetchManagers();
+      }
+    },
+    [fetchManagers]
+  );
+  useWebSocket({ managerId: session ? null : "__disabled__", onMessage: handleWsMessage });
 
   // ── Not signed in: clean landing page ──
   if (!session && status !== "loading") {
@@ -184,16 +200,16 @@ export default function HomePage() {
                 <img src={session.user.image} alt="" className="h-7 w-7 rounded-full border-2 border-white/30" referrerPolicy="no-referrer" />
               ) : (
                 <div className="h-7 w-7 rounded-full bg-white/20 flex items-center justify-center text-white text-xs font-bold">
-                  {(displayName || session?.user?.name)?.[0] || "?"}
+                  {displayName?.[0] || "?"}
                 </div>
               )}
-              <span className="text-white text-sm font-medium hidden sm:inline">{displayName || session?.user?.name}</span>
+              <span className="text-white text-sm font-medium hidden sm:inline">{displayName}</span>
               <span className="px-2 py-0.5 bg-white/20 rounded-full text-[11px] font-semibold text-white/90">
                 {isAdmin ? "Admin" : "Manager"}
               </span>
             </div>
             <button
-              onClick={() => signOut()}
+              onClick={() => { sessionStorage.clear(); signOut(); }}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/20 backdrop-blur rounded-full text-white/90 text-sm transition-colors"
             >
               <LogOut className="h-3.5 w-3.5" />
@@ -210,7 +226,7 @@ export default function HomePage() {
             <h1 className="text-3xl font-bold text-white">MetaSource</h1>
           </div>
           <p className="text-blue-100 max-w-xl">
-            Welcome back, {(displayName || session?.user?.name || "").split(" ")[0]}. Choose a manager to view their portfolio or open Admin View for the full picture.
+            Welcome back, {(displayName || "").split(" ")[0]}. Choose a manager to view their portfolio or open Admin View for the full picture.
           </p>
         </div>
       </header>
@@ -283,6 +299,7 @@ export default function HomePage() {
                           <h3 className="font-semibold text-gray-900 group-hover:text-blue-600 transition-colors">
                             {manager.name}
                           </h3>
+                          <p className="text-xs text-gray-500">{manager.email}</p>
                           <p className="text-xs text-gray-500">{config?.label || manager.category}</p>
                         </div>
                       </div>

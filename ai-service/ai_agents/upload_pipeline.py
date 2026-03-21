@@ -2,7 +2,7 @@ import os
 import time
 import asyncio
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 import psycopg2
 import httpx
@@ -60,8 +60,12 @@ async def broadcast_progress(
         )
 
 
-def generate_requisition_id(category: str, conn) -> str:
-    """Generate the next requisition ID for a category (e.g. REQ-ENG-042)."""
+def generate_requisition_id(category: str, conn, cat_offset: int = 0) -> str:
+    """Generate the next requisition ID for a category (e.g. REQ-ENG-042).
+
+    cat_offset accounts for records already inserted in this batch but not yet
+    visible to the MAX query (same transaction or concurrent uploads).
+    """
     short = CATEGORY_SHORT.get(category, "GEN")
     cur = conn.cursor()
     cur.execute(
@@ -70,14 +74,15 @@ def generate_requisition_id(category: str, conn) -> str:
         (category,),
     )
     max_num = cur.fetchone()[0]
-    return f"REQ-{short}-{max_num + 1:03d}"
+    return f"REQ-{short}-{max_num + 1 + cat_offset:03d}"
 
 
-def upsert_record(validated: CleanedRequisition, conn) -> str:
+def upsert_record(validated: CleanedRequisition, conn, cat_created_counts: dict[str, int] | None = None) -> str:
     """Insert a validated record into the Requisition table. Returns requisitionId."""
-    req_id = generate_requisition_id(validated.category, conn)
+    cat_offset = (cat_created_counts or {}).get(validated.category, 0)
+    req_id = generate_requisition_id(validated.category, conn, cat_offset)
     rid = str(uuid.uuid4())
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     budget = validated.budgetAllocated or (
         validated.billRateHourly * validated.headcountNeeded * 2080
     )
@@ -216,16 +221,19 @@ async def run_pipeline(
 
     conn = _get_conn()
     created = 0
+    cat_created_counts: dict[str, int] = {}
     try:
         for r in records:
             if r.status != RecordStatus.VALIDATED:
                 continue
             try:
                 validated = CleanedRequisition.model_validate(r.cleaned_data)
-                req_id = upsert_record(validated, conn)
+                req_id = upsert_record(validated, conn, cat_created_counts)
+                conn.commit()
                 r.requisition_id = req_id
                 r.status = RecordStatus.UPLOADED
                 created += 1
+                cat_created_counts[validated.category] = cat_created_counts.get(validated.category, 0) + 1
             except Exception as e:
                 r.status = RecordStatus.FAILED
                 r.error = f"DB insert failed: {str(e)}"
@@ -236,7 +244,6 @@ async def run_pipeline(
                 except Exception:
                     pass
                 conn = _get_conn()
-        conn.commit()
     finally:
         conn.close()
 

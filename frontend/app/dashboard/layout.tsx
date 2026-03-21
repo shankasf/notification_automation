@@ -64,21 +64,19 @@ function DashboardLayoutInner({ children }: { children: React.ReactNode }) {
           const found = data.find((m: ManagerInfo) => m.id === managerId);
           if (found) setManager(found);
         }
-        // Derive role + display name from session email
+        // Derive role + display name from DB, not Google account
         const email = session?.user?.email;
         if (email) {
+          const me = data.find((m: ManagerInfo) => m.email === email);
           if (email === ADMIN_EMAIL) {
             setUserRole({ isAdmin: true, label: "Admin" });
-            setDisplayName("Admin");
-          } else {
-            const me = data.find((m: ManagerInfo) => m.email === email);
-            if (me) {
-              setUserRole({
-                isAdmin: false,
-                label: me.category.replace(/_/g, " "),
-              });
-              setDisplayName(me.name);
-            }
+            setDisplayName(me ? me.name : "Admin");
+          } else if (me) {
+            setUserRole({
+              isAdmin: false,
+              label: me.category.replace(/_/g, " "),
+            });
+            setDisplayName(me.name);
           }
         }
       });
@@ -231,11 +229,11 @@ function DashboardLayoutInner({ children }: { children: React.ReactNode }) {
                     <img src={session.user.image} alt="" className="h-7 w-7 rounded-full" referrerPolicy="no-referrer" />
                   ) : (
                     <div className="h-7 w-7 rounded-full bg-gray-200 flex items-center justify-center text-xs font-bold text-gray-600">
-                      {(displayName || session.user.name)?.[0] || "?"}
+                      {displayName?.[0] || "?"}
                     </div>
                   )}
                   <div className="hidden md:flex flex-col">
-                    <span className="text-sm text-gray-700 font-medium leading-tight">{displayName || session.user.name}</span>
+                    <span className="text-sm text-gray-700 font-medium leading-tight">{displayName}</span>
                     {userRole && (
                       <span className={cn(
                         "text-[10px] font-semibold leading-tight",
@@ -248,7 +246,7 @@ function DashboardLayoutInner({ children }: { children: React.ReactNode }) {
                   </div>
                 </div>
                 <button
-                  onClick={() => signOut({ callbackUrl: "/" })}
+                  onClick={() => { sessionStorage.clear(); signOut({ callbackUrl: "/" }); }}
                   className="p-2 rounded-lg hover:bg-gray-100 transition-colors text-gray-500 hover:text-gray-700"
                   title="Sign out"
                 >

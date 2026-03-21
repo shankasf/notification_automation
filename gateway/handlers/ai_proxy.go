@@ -44,6 +44,16 @@ func GenericProxyHandler(pythonURL string) gin.HandlerFunc {
 		if rid, ok := reqID.(string); ok {
 			req.Header.Set("X-Request-ID", rid)
 		}
+		// Forward user identity headers for downstream audit / context
+		if email, ok := c.Get("user_email"); ok {
+			req.Header.Set("X-User-Email", email.(string))
+		}
+		if role, ok := c.Get("user_role"); ok {
+			req.Header.Set("X-User-Role", role.(string))
+		}
+		if mid, ok := c.Get("manager_id"); ok {
+			req.Header.Set("X-Manager-Id", mid.(string))
+		}
 		req.Header.Set("Content-Type", "application/json")
 
 		client := &http.Client{}

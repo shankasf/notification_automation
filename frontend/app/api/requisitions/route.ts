@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
 import { prisma } from "@/lib/prisma";
 import { Prisma, RequisitionCategory, RequisitionStatus, Priority } from "@prisma/client";
-import { publishChangeNotification } from "@/lib/sns";
 
 export async function GET(request: NextRequest) {
   try {
@@ -68,6 +68,9 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    const session = await getServerSession();
+    const changedBy = session?.user?.email || "system";
+
     const body = await request.json();
 
     // Auto-generate requisitionId using the category short name (e.g. REQ-ENG-001)
@@ -123,19 +126,8 @@ export async function POST(request: NextRequest) {
         requisitionId: requisition.id,
         changeType: "CREATED",
         summary: `New requisition ${requisitionId} created for ${body.roleTitle} role`,
-        changedBy: "admin",
+        changedBy,
       },
-    });
-
-    // Publish SNS notification
-    publishChangeNotification({
-      type: "CREATED",
-      requisitionId,
-      roleTitle: body.roleTitle,
-      category: body.category,
-      summary: `New requisition ${requisitionId} created for ${body.roleTitle} role`,
-      changedBy: "admin",
-      timestamp: new Date().toISOString(),
     });
 
     return NextResponse.json(requisition, { status: 201 });

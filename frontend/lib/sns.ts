@@ -7,7 +7,7 @@ import {
 } from "@aws-sdk/client-sns";
 
 const TOPIC_NAME = "metasource-requisition-changes";
-const ADMIN_EMAIL = process.env.SNS_ADMIN_EMAIL || "sagar@callsphere.tech";
+const ADMIN_EMAIL = process.env.SNS_ADMIN_EMAIL || "";
 
 let cachedTopicArn: string | null = null;
 
@@ -39,6 +39,10 @@ export async function subscribeAdminEmail(
   const client = getSNSClient();
   const topicArn = await ensureTopic();
   const targetEmail = email || ADMIN_EMAIL;
+
+  if (!targetEmail) {
+    return { subscriptionArn: "NoEmailConfigured", alreadySubscribed: false };
+  }
 
   // Check if already subscribed
   const existing = await client.send(

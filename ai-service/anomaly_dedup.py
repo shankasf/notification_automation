@@ -70,7 +70,7 @@ def is_duplicate(fingerprint: str, hours: int = 24) -> bool:
             """
             SELECT 1 FROM "AnomalyFingerprint"
             WHERE fingerprint = %s
-              AND "createdAt" >= NOW() - INTERVAL '%s hours'
+              AND "createdAt" >= NOW() - (%s * INTERVAL '1 hour')
             LIMIT 1
             """,
             (fingerprint, hours),

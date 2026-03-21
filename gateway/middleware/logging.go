@@ -21,6 +21,7 @@ func RequestLoggingMiddleware() gin.HandlerFunc {
 			reqID = uuid.New().String()[:12]
 		}
 		c.Set("request_id", reqID)
+		c.Set("correlation_id", reqID)
 		c.Header("X-Request-ID", reqID)
 
 		start := time.Now()

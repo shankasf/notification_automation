@@ -349,374 +349,237 @@ meta_test/
 
 ---
 
-## Future: Data Pipeline with Apache Airflow & DBT
+## AWS Infrastructure — Reliability, Compliance & Guardrails
 
-The platform currently runs AI summarization every 15 minutes, anomaly detection on each change + daily, and data ingestion via admin-triggered uploads. As data volume grows and analytics requirements expand, a dedicated data pipeline using **Apache Airflow** (orchestration) and **DBT** (transformation) would replace these ad-hoc processes with scheduled, observable, testable pipelines.
+The platform uses AWS services for reliable async processing, monitoring, data compliance, and security. No Airflow — the complexity doesn't justify it at current scale. SQS + CloudWatch + gateway-native scheduling provides the same reliability with fewer moving parts.
 
-### Why Airflow + DBT
-
-| Current Approach | Problem at Scale | Airflow/DBT Solution |
-|-----------------|------------------|---------------------|
-| AI summarization runs on a 15-min cron in Python | No retry on failure, no visibility into backlog | Airflow DAG with retries, SLA alerts, backfill capability |
-| Anomaly detection triggered per-change + daily scan | Duplicate work, no dependency management | Airflow schedules detection after summarization completes |
-| CSV/Excel upload pipeline is synchronous in gateway | Blocks API, no progress tracking for large files | Airflow async pipeline with stage-level status |
-| Market rate scraping is manual | No scheduling, no staleness detection | Airflow DAG scrapes on schedule, DBT flags stale data |
-| Dashboard stats computed on every API call | Redundant computation, slow at scale | DBT pre-computes materialized views, Airflow refreshes them |
-| No data quality checks | Bad data discovered only when users complain | DBT tests enforce schema, uniqueness, freshness |
-
-### System Design — Airflow Orchestration Layer
+### Architecture — AWS Services Integration
 
 ```mermaid
 flowchart TB
-    subgraph Sources["Data Sources"]
-        PG[(PostgreSQL<br/>meta_source)]
-        CSV[CSV / Excel<br/>Uploads]
-        SCRAPE[Market Rate<br/>Scrapers]
-        API_EXT[External APIs<br/>Vendor Systems]
-    end
-
-    subgraph Airflow["Apache Airflow (Orchestrator)"]
-        direction TB
-        SCHED[Airflow Scheduler]
-
-        subgraph DAGs["DAG Definitions"]
-            DAG1["📋 requisition_changes_pipeline<br/>⏰ Every 15 min"]
-            DAG2["🔍 anomaly_detection_pipeline<br/>⏰ Hourly"]
-            DAG3["📂 data_ingestion_pipeline<br/>⏰ Event-triggered"]
-            DAG4["📊 analytics_refresh_pipeline<br/>⏰ Every 30 min"]
-            DAG5["💰 market_rates_pipeline<br/>⏰ Daily at 6 AM"]
-            DAG6["🧹 data_quality_pipeline<br/>⏰ Daily at midnight"]
-        end
-
-        SCHED --> DAGs
-    end
-
-    subgraph DBT["DBT (Transform Layer)"]
-        direction TB
-        subgraph Staging["Staging Models"]
-            STG1[stg_requisitions]
-            STG2[stg_changes]
-            STG3[stg_notifications]
-            STG4[stg_market_rates]
-        end
-
-        subgraph Intermediate["Intermediate Models"]
-            INT1[int_change_summaries]
-            INT2[int_anomaly_scores]
-            INT3[int_rate_benchmarks]
-            INT4[int_manager_workload]
-        end
-
-        subgraph Marts["Mart Models (Materialized Views)"]
-            MART1[mart_dashboard_stats]
-            MART2[mart_manager_overview]
-            MART3[mart_budget_tracking]
-            MART4[mart_hiring_velocity]
-            MART5[mart_anomaly_report]
-        end
-
-        Staging --> Intermediate --> Marts
-    end
-
-    subgraph Consumers["Consumers"]
-        GW[Go Gateway API]
-        AI[AI Service]
-        DASH[Dashboard UI]
-        EMAIL[Email Alerts<br/>AWS SNS]
-    end
-
-    Sources --> Airflow
-    Airflow -->|"dbt run"| DBT
-    DBT -->|Materialized tables| PG
-    PG --> Consumers
-    Airflow -->|"Trigger on completion"| AI
-    Airflow -->|"Trigger on anomaly"| EMAIL
-```
-
-### DAG Design — Requisition Changes Pipeline
-
-This is the core pipeline that replaces the current 15-minute cron summarization and per-change anomaly detection.
-
-```mermaid
-flowchart LR
-    subgraph DAG["requisition_changes_pipeline — Runs every 15 min"]
-        direction LR
-        T1["extract_new_changes<br/>─────────────<br/>Query RequisitionChange<br/>where summary IS NULL"]
-        T2["dbt_run_staging<br/>─────────────<br/>dbt run --select<br/>stg_changes"]
-        T3["ai_generate_summaries<br/>─────────────<br/>Batch call AI Service<br/>for plain English summaries"]
-        T4["dbt_run_intermediate<br/>─────────────<br/>dbt run --select<br/>int_change_summaries<br/>int_anomaly_scores"]
-        T5["detect_anomalies<br/>─────────────<br/>Flag rate spikes >10%<br/>budget >90%, stale >30d"]
-        T6["notify_managers<br/>─────────────<br/>Create notifications<br/>+ WebSocket broadcast"]
-        T7["dbt_run_marts<br/>─────────────<br/>dbt run --select<br/>mart_dashboard_stats<br/>mart_anomaly_report"]
-        T8["refresh_websocket<br/>─────────────<br/>Push 'refresh' event<br/>to all connections"]
-
-        T1 --> T2 --> T3 --> T4 --> T5 --> T6 --> T7 --> T8
-    end
-```
-
-### DAG Design — Data Ingestion Pipeline
-
-Replaces the synchronous upload endpoint with an async, stage-tracked pipeline.
-
-```mermaid
-flowchart TB
-    subgraph DAG["data_ingestion_pipeline — Event-triggered by file upload"]
-        direction TB
-
-        UPLOAD["file_upload_sensor<br/>─────────────<br/>Watch S3 bucket for<br/>new CSV/Excel/JSON"]
-
-        subgraph Parse["Stage 1: Parse"]
-            P1["detect_format<br/>CSV / Excel / JSON / Text"]
-            P2["extract_records<br/>Programmatic for structured<br/>AI for unstructured"]
-        end
-
-        subgraph Clean["Stage 2: Clean (DBT)"]
-            C1["dbt run --select<br/>stg_raw_upload"]
-            C2["dbt run --select<br/>int_cleaned_upload<br/>─────────────<br/>Normalize categories<br/>Parse rates, dates<br/>Resolve vendors"]
-        end
-
-        subgraph Validate["Stage 3: Validate"]
-            V1["dbt test --select<br/>int_cleaned_upload<br/>─────────────<br/>not_null, unique,<br/>accepted_values,<br/>relationships"]
-            V2["quarantine_failures<br/>─────────────<br/>Move bad rows to<br/>quarantine table"]
-        end
-
-        subgraph Load["Stage 4: Load"]
-            L1["upsert_requisitions<br/>─────────────<br/>Insert/update with<br/>change tracking"]
-            L2["create_audit_records<br/>─────────────<br/>Log BULK_IMPORT<br/>changes"]
-            L3["trigger_notifications<br/>─────────────<br/>Notify managers of<br/>new/updated requests"]
-        end
-
-        UPLOAD --> Parse --> Clean --> Validate --> Load
-    end
-```
-
-### DAG Design — Analytics & Market Rates
-
-```mermaid
-flowchart LR
-    subgraph Analytics["analytics_refresh_pipeline — Every 30 min"]
-        direction LR
-        A1["dbt run --select<br/>mart_dashboard_stats<br/>mart_manager_overview<br/>mart_budget_tracking<br/>mart_hiring_velocity"]
-        A2["dbt test --select<br/>tag:marts"]
-        A3["websocket_refresh<br/>broadcast"]
-        A1 --> A2 --> A3
-    end
-
-    subgraph Market["market_rates_pipeline — Daily 6 AM"]
-        direction LR
-        M1["scrape_glassdoor<br/>scrape_levels_fyi<br/>scrape_indeed"]
-        M2["dbt run --select<br/>stg_market_rates"]
-        M3["dbt run --select<br/>int_rate_benchmarks"]
-        M4["dbt test<br/>freshness check"]
-        M5["flag_stale_rates<br/>alert if >7 days old"]
-        M1 --> M2 --> M3 --> M4 --> M5
-    end
-```
-
-### DBT Model Dependency Graph
-
-```mermaid
-flowchart TB
-    subgraph Sources["Source Tables (PostgreSQL)"]
-        S_REQ[source: Requisition]
-        S_CHG[source: RequisitionChange]
-        S_NOT[source: Notification]
-        S_MGR[source: SourcingManager]
-        S_MKT[source: MarketRate]
-        S_ANO[source: AnomalyFingerprint]
-    end
-
-    subgraph Staging["Staging Layer — Clean & type-cast"]
-        STG_REQ[stg_requisitions<br/>───<br/>Cast types, add<br/>is_active flag]
-        STG_CHG[stg_changes<br/>───<br/>Parse timestamps,<br/>classify change types]
-        STG_NOT[stg_notifications<br/>───<br/>Add read latency<br/>calculation]
-        STG_MKT[stg_market_rates<br/>───<br/>Normalize titles,<br/>deduplicate]
-    end
-
-    subgraph Intermediate["Intermediate Layer — Business logic"]
-        INT_SUM[int_change_summaries<br/>───<br/>Group changes by<br/>requisition + time window]
-        INT_ANO[int_anomaly_scores<br/>───<br/>Rate deviation from<br/>market, budget burn rate]
-        INT_BENCH[int_rate_benchmarks<br/>───<br/>Category/location<br/>percentiles]
-        INT_WORK[int_manager_workload<br/>───<br/>Open reqs, pending<br/>changes, alert count]
-        INT_VEL[int_hiring_velocity<br/>───<br/>Days per stage,<br/>fill rate trends]
-    end
-
-    subgraph Marts["Mart Layer — API-ready tables"]
-        MART_DASH[mart_dashboard_stats<br/>───<br/>Pre-computed stats<br/>for /api/stats]
-        MART_MGR[mart_manager_overview<br/>───<br/>Per-manager cards<br/>for home page]
-        MART_BUD[mart_budget_tracking<br/>───<br/>Budget utilization<br/>forecasts]
-        MART_HIRE[mart_hiring_velocity<br/>───<br/>Time-to-fill metrics<br/>by category]
-        MART_ANO[mart_anomaly_report<br/>───<br/>Active anomalies<br/>with severity ranking]
-    end
-
-    S_REQ --> STG_REQ
-    S_CHG --> STG_CHG
-    S_NOT --> STG_NOT
-    S_MKT --> STG_MKT
-    S_MGR --> INT_WORK
-
-    STG_REQ --> INT_SUM
-    STG_REQ --> INT_ANO
-    STG_REQ --> INT_WORK
-    STG_REQ --> INT_VEL
-    STG_CHG --> INT_SUM
-    STG_CHG --> INT_ANO
-    STG_MKT --> INT_BENCH
-
-    INT_SUM --> MART_DASH
-    INT_SUM --> MART_MGR
-    INT_ANO --> MART_ANO
-    INT_ANO --> MART_DASH
-    INT_BENCH --> MART_ANO
-    INT_WORK --> MART_MGR
-    INT_VEL --> MART_HIRE
-    INT_WORK --> MART_DASH
-    STG_NOT --> MART_MGR
-
-    S_ANO --> INT_ANO
-    INT_SUM --> MART_BUD
-    STG_REQ --> MART_BUD
-```
-
-### Proposed Project Structure
-
-```
-meta_test/
-  ...existing services...
-  data-pipeline/
-    dags/
-      requisition_changes.py      # 15-min change processing DAG
-      anomaly_detection.py        # Hourly anomaly scan DAG
-      data_ingestion.py           # Event-triggered upload DAG
-      analytics_refresh.py        # 30-min mart refresh DAG
-      market_rates.py             # Daily scraping DAG
-      data_quality.py             # Daily validation DAG
-    dbt/
-      models/
-        staging/
-          stg_requisitions.sql
-          stg_changes.sql
-          stg_notifications.sql
-          stg_market_rates.sql
-        intermediate/
-          int_change_summaries.sql
-          int_anomaly_scores.sql
-          int_rate_benchmarks.sql
-          int_manager_workload.sql
-          int_hiring_velocity.sql
-        marts/
-          mart_dashboard_stats.sql
-          mart_manager_overview.sql
-          mart_budget_tracking.sql
-          mart_hiring_velocity.sql
-          mart_anomaly_report.sql
-      tests/
-        assert_no_null_requisition_ids.sql
-        assert_valid_status_transitions.sql
-        assert_budget_not_negative.sql
-      dbt_project.yml
-      profiles.yml
-    docker-compose.airflow.yml    # Local Airflow dev environment
-    requirements.txt
-```
-
-### Integration with Existing Services
-
-```mermaid
-flowchart LR
-    subgraph Current["Current Architecture"]
+    subgraph Browser["Browser"]
         FE[Next.js Frontend]
-        GW[Go Gateway]
-        AI[AI Service]
-        PG[(PostgreSQL)]
     end
 
-    subgraph New["New Pipeline Layer"]
-        AF[Apache Airflow]
-        DBT[DBT]
-        S3[S3 Staging Bucket]
+    subgraph K8s["k3s Cluster"]
+        subgraph GW["Go Gateway"]
+            API[REST API + Auth Middleware]
+            WS[WebSocket Hub]
+            SQS_PROD[SQS Producers]
+            SQS_CONS[SQS Consumers]
+            SCHED[Scheduled Tasks]
+            AUDIT[Audit Logger]
+        end
+
+        subgraph AI["Python AI Service"]
+            GUARD[Guardrails Layer]
+            LLM_PROXY[OpenAI Agent SDK]
+            TOOLS[DB Query Tools]
+        end
     end
 
-    FE -->|"Upload file"| GW
-    GW -->|"Store raw file"| S3
-    S3 -->|"S3 sensor triggers"| AF
-    AF -->|"dbt run / dbt test"| DBT
-    DBT -->|"Read/write"| PG
-    AF -->|"Call /ai/summarize,<br/>/ai/analyze"| AI
-    AF -->|"POST /api/notifications<br/>+ WebSocket refresh"| GW
-    GW -->|"Read mart tables<br/>instead of live queries"| PG
+    subgraph AWS["AWS Services"]
+        SQS_Q["SQS Queues<br/>3 main + 3 DLQ"]
+        SNS[SNS Topic]
+        CW[CloudWatch<br/>Metrics + Alarms]
+        SM[Secrets Manager]
+    end
 
-    style New fill:#f0f9ff,stroke:#0284c7
-    style Current fill:#f0fdf4,stroke:#16a34a
+    subgraph DB["Database"]
+        PG[(PostgreSQL<br/>+ AuditLog<br/>+ DataClassification<br/>+ UserRole)]
+    end
+
+    subgraph OpenAI["External"]
+        GPT[OpenAI API]
+    end
+
+    FE -->|"JWT Auth"| API
+    FE -->|"JWT Auth"| WS
+    API --> SQS_PROD
+    SQS_PROD --> SQS_Q
+    SQS_Q --> SQS_CONS
+    SQS_CONS --> SNS
+    SQS_CONS --> AI
+    SCHED --> AI
+    API -->|"X-User-Email<br/>X-User-Role"| AI
+    GUARD --> TOOLS
+    TOOLS -->|"filter_for_llm()"| LLM_PROXY
+    LLM_PROXY --> GPT
+    SQS_Q -->|"DLQ depth > 0"| CW
+    CW -->|"Alarm"| SNS
+    SM -->|"K8s ExternalSecret"| K8s
+    API --> AUDIT
+    AUDIT --> PG
+    TOOLS --> PG
+    API --> PG
 ```
 
-### Implementation Phases
+### SQS Queues — Replacing Fire-and-Forget Goroutines
 
-| Phase | Scope | Outcome |
-|-------|-------|---------|
-| **Phase 1** | Set up Airflow + DBT, migrate 15-min summarization cron to a DAG | Retries, alerting, and observability for existing process |
-| **Phase 2** | Add DBT staging + intermediate models, replace live `/api/stats` queries with mart tables | Dashboard loads from pre-computed tables — faster API responses |
-| **Phase 3** | Move upload pipeline from synchronous gateway handler to Airflow DAG with S3 staging | Async uploads, stage-level progress, automatic retries |
-| **Phase 4** | Add market rate scraping DAG with freshness checks and DBT tests | Automated rate updates, stale data alerts |
-| **Phase 5** | Full data quality suite — DBT tests on all models, Airflow SLA monitoring, anomaly alerting | Data contracts enforced, pipeline health visible in Airflow UI |
+Every async operation now flows through SQS with automatic retry (3x) and dead-letter queues.
 
----
+| Queue | Type | What It Processes | DLQ |
+|-------|------|-------------------|-----|
+| `metasource-analysis.fifo` | FIFO | AI anomaly detection per category (serialized by MessageGroupId) | `metasource-analysis-dlq.fifo` |
+| `metasource-email` | Standard | Email notifications to managers via AI service | `metasource-email-dlq` |
+| `metasource-sns-publish` | Standard | SNS change event publishing | `metasource-sns-publish-dlq` |
 
-## Glossary — Apache Airflow & DBT Terms
+```mermaid
+flowchart LR
+    subgraph Trigger["Requisition Change"]
+        CREATE[Create/Update/Delete]
+    end
 
-### Apache Airflow
+    subgraph Producers["Gateway Producers (sync, <50ms)"]
+        EA[EnqueueAnalysis]
+        EE[EnqueueEmail]
+        ES[EnqueueSNSPublish]
+    end
 
-| Term | Definition |
-|------|-----------|
-| **Airflow** | An open-source platform to programmatically author, schedule, and monitor workflows (data pipelines). Written in Python, originally created at Airbnb. |
-| **DAG (Directed Acyclic Graph)** | A collection of tasks organized with dependencies. "Directed" means tasks flow in one direction, "acyclic" means no circular loops — task A can depend on B, but B cannot depend back on A. Each pipeline is defined as one DAG. |
-| **Task** | A single unit of work within a DAG. For example, "extract new changes from PostgreSQL" or "call the AI summarization API." Tasks are the nodes in the graph. |
-| **Operator** | A template for a task that defines what it actually does. Airflow ships with built-in operators: `PythonOperator` (run a Python function), `BashOperator` (run a shell command), `PostgresOperator` (run a SQL query), `S3Sensor` (wait for a file in S3), etc. |
-| **Sensor** | A special type of operator that waits for an external condition to be met before proceeding. For example, an `S3KeySensor` waits until a file appears in an S3 bucket, then triggers the rest of the DAG. |
-| **DAG Run** | A single execution instance of a DAG. If a DAG is scheduled every 15 minutes, each 15-minute execution is one DAG run. Each run has a status: success, failed, or running. |
-| **Task Instance** | A specific run of a specific task. A DAG run contains one task instance per task defined in the DAG. Each task instance has its own status, logs, and retry count. |
-| **Scheduler** | The Airflow component that monitors all DAGs, triggers DAG runs on schedule, and submits tasks to the executor. It runs as a background process. |
-| **Executor** | The mechanism that actually runs tasks. `LocalExecutor` runs tasks as processes on the same machine. `CeleryExecutor` distributes tasks across multiple worker machines. `KubernetesExecutor` spins up a pod per task. |
-| **Worker** | A process or machine that executes tasks. With `CeleryExecutor`, workers pull tasks from a queue (Redis or RabbitMQ). With `KubernetesExecutor`, each worker is a temporary pod. |
-| **XCom (Cross-Communication)** | A mechanism for tasks to pass small pieces of data to each other. Task A can push a value (e.g., a row count), and Task B can pull it. Not meant for large data — use a database or S3 for that. |
-| **Hook** | A connection interface to external systems (PostgreSQL, S3, Slack, HTTP APIs). Hooks handle authentication and connection pooling. Operators use hooks internally. |
-| **Connection** | A stored credential in Airflow for accessing external systems. Managed via the Airflow UI or environment variables. Contains host, port, login, password, and extras. |
-| **Variable** | A key-value store in Airflow for configuration that may change between environments. For example, `s3_bucket_name = metasource-uploads-prod`. Accessible from any DAG. |
-| **Pool** | A way to limit the number of tasks running concurrently against a shared resource. For example, a pool of size 3 for the AI service ensures at most 3 summarization tasks run at once. |
-| **SLA (Service Level Agreement)** | A deadline for a task or DAG. If a task doesn't complete within its SLA window, Airflow sends an alert (email, Slack, etc.). Used to detect pipeline delays. |
-| **Backfill** | Running a DAG for past dates that were missed. If the pipeline was down for 2 hours, you backfill those 8 missed 15-minute runs. Airflow handles this with `airflow dags backfill`. |
-| **Retry** | Automatic re-execution of a failed task. Configured per task: `retries=3, retry_delay=timedelta(minutes=5)` means retry up to 3 times with 5-minute gaps. |
-| **Trigger Rule** | Defines when a task should run based on its upstream tasks' statuses. Default is `all_success` (all parents succeeded). Others: `one_success`, `all_failed`, `none_failed`, `all_done`. |
-| **Webserver** | The Airflow UI — a web application for monitoring DAGs, viewing task logs, triggering manual runs, and managing connections. Runs on port 8080 by default. |
-| **DAG Bag** | The collection of all DAG files Airflow knows about. The scheduler periodically scans the `dags/` folder and parses every Python file to discover DAGs. |
-| **Catchup** | When a DAG is created with a past `start_date`, Airflow will run it for every missed schedule interval by default. Set `catchup=False` to only run from now forward. |
+    subgraph Queues["SQS Queues"]
+        Q1["analysis.fifo<br/>Visibility: 120s"]
+        Q2["email<br/>Visibility: 30s"]
+        Q3["sns-publish<br/>Visibility: 30s"]
+        DLQ1["analysis-dlq.fifo"]
+        DLQ2["email-dlq"]
+        DLQ3["sns-publish-dlq"]
+    end
 
-### DBT (Data Build Tool)
+    subgraph Consumers["Gateway Consumers (long-polling)"]
+        C1["processAnalysis<br/>Concurrency: 1"]
+        C2["processEmail<br/>Concurrency: 3"]
+        C3["processSNSPublish<br/>Concurrency: 2"]
+    end
 
-| Term | Definition |
-|------|-----------|
-| **DBT** | An open-source command-line tool that enables data analysts and engineers to transform data in their warehouse using SQL SELECT statements. DBT handles the DDL/DML — you write the SELECT, DBT wraps it in CREATE TABLE or CREATE VIEW. |
-| **Model** | A single SQL SELECT statement saved as a `.sql` file. Each model produces one table or view in the database. Models can reference other models using `{{ ref('model_name') }}`. |
-| **ref()** | A Jinja function used in models to reference other models. `{{ ref('stg_requisitions') }}` resolves to the actual table name and tells DBT about the dependency, so it builds models in the right order. |
-| **source()** | A Jinja function to reference raw tables that DBT doesn't manage. `{{ source('meta_source', 'Requisition') }}` points to the existing PostgreSQL table. Sources are defined in a YAML file. |
-| **Materialization** | How DBT persists a model's results. Four types: **view** (CREATE VIEW — lightweight, always fresh, slower queries), **table** (CREATE TABLE — fast queries, rebuilt from scratch each run), **incremental** (INSERT only new/changed rows — fast for large tables), **ephemeral** (not persisted — inlined as CTE into downstream models). |
-| **Staging Model** | The first layer of transformation. One staging model per source table. Handles renaming columns, casting types, and light cleaning. Named with `stg_` prefix. Never contains business logic. |
-| **Intermediate Model** | The middle layer where business logic lives. Joins staging models, applies calculations, filters, and aggregations. Named with `int_` prefix. Not exposed to end users. |
-| **Mart Model** | The final layer — tables designed for direct consumption by APIs, dashboards, or analysts. Pre-aggregated, denormalized, and optimized for read performance. Named with `mart_` prefix. |
-| **dbt run** | The command that executes models. DBT reads the dependency graph, runs models in topological order, and materializes them in the database. `dbt run --select mart_dashboard_stats` runs only that model and its upstream dependencies. |
-| **dbt test** | Runs assertions against your data. Tests catch problems like null IDs, duplicate records, invalid enum values, or broken foreign keys. Failed tests can block downstream DAGs in Airflow. |
-| **Schema Test** | A built-in test defined in YAML. Four types: `not_null` (column has no NULLs), `unique` (no duplicate values), `accepted_values` (only allowed values like status enums), `relationships` (foreign key exists in the referenced table). |
-| **Custom Test (Data Test)** | A SQL query saved as a `.sql` file in the `tests/` folder. If the query returns any rows, the test fails. For example, a query that finds requisitions where `budgetSpent > budgetAllocated`. |
-| **Seed** | A CSV file in the `seeds/` folder that DBT loads into the database as a table. Useful for static reference data like category mappings, location codes, or rate thresholds. Loaded with `dbt seed`. |
-| **Snapshot** | Captures how a table changes over time using Slowly Changing Dimension Type 2 (SCD2). DBT adds `valid_from` and `valid_to` columns. Useful for tracking how requisition statuses or rates change historically. |
-| **Jinja** | The templating language used in DBT SQL files. Enables dynamic SQL: `{% if is_incremental() %}` filters to only new rows in incremental models. Also used for macros, loops, and conditional logic. |
-| **Macro** | A reusable Jinja function. For example, a macro `cents_to_dollars(column)` that wraps `{{ column }} / 100.0` can be called in any model. Stored in the `macros/` folder. |
-| **Profile** | A YAML file (`profiles.yml`) that tells DBT how to connect to the database. Contains host, port, database name, schema, and credentials. Supports multiple targets (dev, staging, prod). |
-| **Target** | An environment within a profile. `dbt run --target prod` uses production credentials and writes to the production schema. `dbt run --target dev` writes to a dev schema for safe testing. |
-| **dbt_project.yml** | The root configuration file for a DBT project. Defines project name, model paths, materialization defaults (e.g., all models in `marts/` are tables, all in `staging/` are views), and variable defaults. |
-| **Freshness** | A source-level check that verifies data is recent enough. Defined in YAML: `warn_after: {count: 1, period: hour}` alerts if the source table hasn't been updated in over an hour. Run with `dbt source freshness`. |
-| **Lineage Graph** | A visual dependency graph showing how models relate to each other — which sources feed which staging models, which staging models feed which marts. Viewable in dbt docs or dbt Cloud. Generated with `dbt docs generate`. |
-| **Incremental Model** | A model with `materialized='incremental'` that only processes new or changed rows instead of rebuilding the entire table. Uses an `{% if is_incremental() %}` block to filter rows added since the last run. Critical for large tables. |
-| **Ephemeral Model** | A model that isn't materialized as a table or view. Instead, its SQL is inlined as a Common Table Expression (CTE) into whatever model references it. Useful for small, reusable logic that doesn't need its own table. |
-| **Tag** | A label applied to models in YAML or config blocks. Enables selective execution: `dbt run --select tag:marts` runs only mart models. `dbt test --select tag:critical` runs only critical tests. |
-| **Selector** | A syntax for choosing which models to run. `dbt run --select stg_requisitions+` runs the model and everything downstream. `dbt run --select +mart_dashboard_stats` runs the model and everything upstream. The `+` operator follows the dependency graph. |
+    CREATE --> EA & EE & ES
+    EA --> Q1
+    EE --> Q2
+    ES --> Q3
+    Q1 --> C1
+    Q2 --> C2
+    Q3 --> C3
+    Q1 -->|"3 failures"| DLQ1
+    Q2 -->|"3 failures"| DLQ2
+    Q3 -->|"3 failures"| DLQ3
+```
+
+### Scheduled Tasks — Replacing Python Crons
+
+Timer-based goroutines in the gateway replace the Python `asyncio.sleep` loops. Same reliability, proper error handling, CloudWatch metrics on every execution.
+
+| Task | Interval | What It Does |
+|------|----------|-------------|
+| Summarization | Every 15 min | Calls AI service to detect unsummarized changes, generate plain English summaries |
+| Anomaly Scan | Every 1 hour | Iterates all 5 categories, runs anomaly detection, deduplicates, creates notifications |
+
+### CloudWatch Monitoring
+
+| Alarm | Triggers When | Action |
+|-------|--------------|--------|
+| `*-dlq-not-empty` (x3) | Any DLQ has >= 1 message for 5 min | SNS email alert |
+| `*-queue-backlog` (x3) | Any main queue > 100 messages for 5 min | SNS email alert |
+| Custom: `TaskFailure` | Scheduled task fails | Logged + metric |
+| Custom: `ProcessingDuration` | Per-message processing time | Dashboard metric |
+
+### Data Compliance — 3-Tier Classification
+
+Every field in the database has a classification tier stored in the `DataClassification` table. The AI service's `filter_for_llm()` function enforces these tiers before any data reaches OpenAI.
+
+| Tier | Rule | Fields |
+|------|------|--------|
+| **TIER1_NEVER_LLM** | Stripped entirely before LLM call | `billRateHourly`, `budgetAllocated`, `budgetSpent`, `vendor`, `notes`, `MarketRate.min/max/medianRate` |
+| **TIER2_ANONYMIZE** | Replaced with ranges/buckets | `headcountNeeded` (5 -> "1-10"), `headcountFilled` |
+| **TIER3_SAFE** | Passed unchanged | `requisitionId`, `roleTitle`, `category`, `status`, `priority`, `location`, `team`, `department` |
+
+```mermaid
+flowchart LR
+    subgraph User["User Query"]
+        Q["What are the open<br/>engineering positions?"]
+    end
+
+    subgraph Guards["AI Service Guardrails"]
+        PII["PII Scanner<br/>Regex: SSN, CC,<br/>email, phone, AWS keys"]
+        PI["Prompt Injection<br/>Detector<br/>11 attack patterns"]
+        DC["Data Classifier<br/>filter_for_llm()"]
+        OS["Output Sanitizer<br/>Strip HTML/JS, scope check"]
+    end
+
+    subgraph LLM["OpenAI"]
+        GPT[gpt-4.1]
+    end
+
+    Q --> PII -->|"Clean"| PI -->|"Safe"| DC -->|"Tier 1 stripped<br/>Tier 2 anonymized"| GPT
+    GPT --> OS -->|"Sanitized response"| User
+```
+
+### RBAC — Server-Side Authorization
+
+```mermaid
+flowchart TB
+    subgraph Request["Incoming Request"]
+        JWT["Authorization: Bearer <NextAuth JWT>"]
+    end
+
+    subgraph Auth["Gateway Auth Middleware"]
+        VALIDATE["Validate JWT<br/>(HS256 + NEXTAUTH_SECRET)"]
+        LOOKUP["Query UserRole table<br/>email -> role + managerId"]
+        SET["Set context:<br/>user_email, user_role, manager_id"]
+    end
+
+    subgraph RBAC["Role-Based Access"]
+        ADMIN["ADMIN<br/>All categories, all endpoints"]
+        MANAGER["MANAGER<br/>Own category only"]
+        VIEWER["VIEWER<br/>Read-only"]
+    end
+
+    subgraph Enforce["Enforcement Points"]
+        GW_ROUTES["Gateway: RequireRole() per route group"]
+        GW_DATA["Gateway: managerId from JWT, not query param"]
+        AI_SCOPE["AI Service: validate_response_scope()"]
+        WS_AUTH["WebSocket: JWT in ?token= param"]
+    end
+
+    JWT --> VALIDATE --> LOOKUP --> SET
+    SET --> ADMIN & MANAGER & VIEWER
+    ADMIN & MANAGER & VIEWER --> Enforce
+```
+
+### Audit Trail
+
+Every API call is logged to the `AuditLog` table with:
+- **Who**: User email + role (from JWT, not hardcoded "admin")
+- **What**: Action type (DATA_READ, DATA_WRITE, AI_QUERY, FILE_UPLOAD, AUTH_FAILURE, RBAC_DENIED)
+- **Where**: Resource + resource ID + HTTP method + path
+- **When**: Timestamp + duration in ms
+- **Correlation**: `X-Request-ID` propagated across all 3 services
+
+The audit middleware uses a buffered Go channel with batch INSERTs (50 entries or 5 seconds) so it never slows down API responses.
+
+### Secrets Management
+
+All credentials are stored in AWS Secrets Manager and synced to K8s via External Secrets Operator:
+
+| Secret | Source | K8s Secret |
+|--------|--------|-----------|
+| Database credentials | `meta-source/prod` | `db-secret` |
+| NextAuth + Google OAuth | `meta-source/prod` | `auth-secret` |
+| SMTP credentials | `meta-source/prod` | `smtp-secret` |
+| OpenAI API key | `openai-secret` (existing) | `openai-secret` |
+| AWS credentials | `aws-secret` (existing) | `aws-secret` |
+
+No hardcoded credentials in code or environment variables. Services fail fast if secrets are missing.
+
+### Security Hardening Summary
+
+| Control | Before | After |
+|---------|--------|-------|
+| **CORS** | `*` (any origin) | `meta.callsphere.tech` + `localhost:3000` only |
+| **Auth** | None on gateway | NextAuth JWT validation on every endpoint |
+| **RBAC** | Frontend email check | Server-side UserRole table + RequireRole() middleware |
+| **Rate Limiting** | 100 req/s global | Per-user: 30/min for AI chat, 5/min for uploads, 100/min default |
+| **PII** | Raw data to OpenAI | Regex scanner strips SSN, CC, phone, email, AWS keys |
+| **Prompt Injection** | None | 11 attack patterns blocked |
+| **Data Classification** | All fields to LLM | 3-tier system: pricing/budgets never reach LLM |
+| **Audit** | `changedBy: "admin"` | Full audit log with user identity, correlation IDs |
+| **Credentials** | Hardcoded `postgres:postgres` | AWS Secrets Manager + fail-fast on missing env vars |
+| **WebSocket** | No auth, user-supplied managerId | JWT auth, server-derived managerId |

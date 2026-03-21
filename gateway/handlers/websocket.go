@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
+
+	"metasource-gateway/middleware"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -28,8 +31,29 @@ var NotifHub = &Hub{
 	broadcast:   make(chan BroadcastMsg, 256),
 }
 
+var allowedOrigins = map[string]bool{
+	"https://meta.callsphere.tech": true,
+	"http://localhost:3000":         true,
+	"http://localhost:8080":         true,
+}
+
 var wsUpgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
+	CheckOrigin: func(r *http.Request) bool {
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			return true // allow non-browser clients (curl, Postman)
+		}
+		// Exact match against allowed origins
+		if allowedOrigins[origin] {
+			return true
+		}
+		// Allow any localhost port for development
+		if strings.HasPrefix(origin, "http://localhost:") {
+			return true
+		}
+		slog.Warn("ws_origin_rejected", "origin", origin)
+		return false
+	},
 }
 
 func init() {
@@ -44,24 +68,28 @@ func (h *Hub) run() {
 			continue
 		}
 
-		// Snapshot connections under lock
+		// Snapshot connections with their owner IDs under lock
+		type connOwner struct {
+			conn    *websocket.Conn
+			ownerID string
+		}
 		h.mu.RLock()
-		targets := make([]*websocket.Conn, 0)
+		targets := make([]connOwner, 0)
 		for conn := range h.connections[msg.ManagerID] {
-			targets = append(targets, conn)
+			targets = append(targets, connOwner{conn, msg.ManagerID})
 		}
 		if msg.ManagerID != "admin" {
 			for conn := range h.connections["admin"] {
-				targets = append(targets, conn)
+				targets = append(targets, connOwner{conn, "admin"})
 			}
 		}
 		h.mu.RUnlock()
 
-		for _, conn := range targets {
-			if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		for _, t := range targets {
+			if err := t.conn.WriteMessage(websocket.TextMessage, data); err != nil {
 				slog.Warn("ws_write_error", "error", err)
-				h.removeConn(msg.ManagerID, conn)
-				conn.Close()
+				h.removeConn(t.ownerID, t.conn)
+				t.conn.Close()
 			}
 		}
 	}
@@ -105,11 +133,30 @@ func (h *Hub) ConnCount() int {
 	return total
 }
 
-// WebSocket endpoint: /ws/notifications?managerId=xxx
+// WebSocket endpoint: /ws/notifications?token=<jwt>
+// The token is validated and the managerId is derived from the authenticated
+// user's role in the database, not from user-supplied input.
 func HandleWebSocket(c *gin.Context) {
-	managerID := c.Query("managerId")
-	if managerID == "" {
-		managerID = "admin"
+	tokenStr := c.Query("token")
+	if tokenStr == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Missing token parameter"})
+		return
+	}
+
+	email, _, role, managerID, err := middleware.ValidateTokenString(tokenStr)
+	if err != nil {
+		slog.Warn("ws_auth_failed", "error", err)
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired token"})
+		return
+	}
+
+	// Determine the hub key: admins subscribe as "admin", managers use their managerId
+	hubKey := managerID
+	if strings.EqualFold(role, "admin") {
+		hubKey = "admin"
+	}
+	if hubKey == "" {
+		hubKey = "admin" // fallback for users without a managerId
 	}
 
 	conn, err := wsUpgrader.Upgrade(c.Writer, c.Request, nil)
@@ -118,20 +165,22 @@ func HandleWebSocket(c *gin.Context) {
 		return
 	}
 
-	NotifHub.addConn(managerID, conn)
-	slog.Info("ws_connected", "managerId", managerID)
+	slog.Info("ws_connected", "email", email, "role", role, "managerId", hubKey)
 
-	// Send welcome message
+	// Send welcome message BEFORE adding to hub to avoid concurrent writes
+	// (gorilla/websocket allows only one concurrent writer)
 	conn.WriteJSON(gin.H{
 		"type":    "connected",
-		"payload": gin.H{"managerId": managerID},
+		"payload": gin.H{"email": email, "role": role, "managerId": hubKey},
 	})
+
+	NotifHub.addConn(hubKey, conn)
 
 	// Read loop (keeps connection alive, handles client messages)
 	defer func() {
-		NotifHub.removeConn(managerID, conn)
+		NotifHub.removeConn(hubKey, conn)
 		conn.Close()
-		slog.Info("ws_disconnected", "managerId", managerID)
+		slog.Info("ws_disconnected", "email", email, "managerId", hubKey)
 	}()
 
 	for {

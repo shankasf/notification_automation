@@ -1,11 +1,12 @@
 """Email notification sender using AWS SES SMTP."""
 
+import html
 import os
 import smtplib
 import time
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from datetime import datetime
+from datetime import datetime, timezone
 
 from logging_config import get_logger
 
@@ -15,15 +16,29 @@ SMTP_HOST = os.environ.get("SMTP_HOST", "email-smtp.us-east-1.amazonaws.com")
 SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
 SMTP_USER = os.environ.get("SMTP_USER", "")
 SMTP_PASS = os.environ.get("SMTP_PASS", "")
-SMTP_FROM = os.environ.get("SMTP_FROM", "metasource@callsphere.tech")
+SMTP_FROM = os.environ.get("SMTP_FROM", "")
+
+
+def _mask_email(email: str) -> str:
+    """Mask an email address for safe logging. e.g. 'sarah@gmail.com' -> 's***@gmail.com'."""
+    if not email or "@" not in email:
+        return "***"
+    local, domain = email.rsplit("@", 1)
+    if len(local) <= 1:
+        masked_local = "*"
+    else:
+        masked_local = local[0] + "***"
+    return f"{masked_local}@{domain}"
 
 
 def send_notification_email(to_email: str, manager_name: str, subject: str, body_text: str, notif_type: str = "CHANGE_SUMMARY"):
     """Send an email notification to a sourcing manager."""
-    if not SMTP_USER or not SMTP_PASS:
+    masked = _mask_email(to_email)
+
+    if not SMTP_USER or not SMTP_PASS or not SMTP_FROM:
         logger.warning(
             "smtp_not_configured",
-            extra={"extra_data": {"to_email": to_email, "subject": subject}},
+            extra={"extra_data": {"to_email": masked, "subject": subject}},
         )
         return False
 
@@ -31,8 +46,7 @@ def send_notification_email(to_email: str, manager_name: str, subject: str, body
         "sending_email",
         extra={
             "extra_data": {
-                "to_email": to_email,
-                "manager_name": manager_name,
+                "to_email": masked,
                 "subject": subject,
                 "notif_type": notif_type,
             }
@@ -49,20 +63,24 @@ def send_notification_email(to_email: str, manager_name: str, subject: str, body
     color = type_colors.get(notif_type, "#6B7280")
     type_label = notif_type.replace("_", " ").title()
 
-    html = f"""
+    safe_name = html.escape(manager_name)
+    safe_subject = html.escape(subject)
+    safe_body = html.escape(body_text)
+
+    html_content = f"""
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto;">
         <div style="background: linear-gradient(135deg, #1e40af 0%, #4338ca 100%); padding: 24px 32px; border-radius: 12px 12px 0 0;">
             <h1 style="color: white; margin: 0; font-size: 20px;">MetaSource</h1>
             <p style="color: rgba(255,255,255,0.7); margin: 4px 0 0; font-size: 13px;">Sourcing Manager Notification</p>
         </div>
         <div style="background: #ffffff; padding: 32px; border: 1px solid #e5e7eb; border-top: none;">
-            <p style="color: #374151; margin: 0 0 8px;">Hi {manager_name},</p>
+            <p style="color: #374151; margin: 0 0 8px;">Hi {safe_name},</p>
             <div style="display: inline-block; background: {color}15; color: {color}; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; margin-bottom: 16px;">
                 {type_label}
             </div>
-            <h2 style="color: #111827; margin: 0 0 12px; font-size: 18px;">{subject}</h2>
+            <h2 style="color: #111827; margin: 0 0 12px; font-size: 18px;">{safe_subject}</h2>
             <div style="background: #f9fafb; border-radius: 8px; padding: 16px; border-left: 4px solid {color}; margin-bottom: 24px;">
-                <p style="color: #4b5563; margin: 0; font-size: 14px; line-height: 1.6; white-space: pre-wrap;">{body_text}</p>
+                <p style="color: #4b5563; margin: 0; font-size: 14px; line-height: 1.6; white-space: pre-wrap;">{safe_body}</p>
             </div>
             <a href="https://meta.callsphere.tech/dashboard" style="display: inline-block; background: #2563eb; color: white; padding: 10px 24px; border-radius: 8px; text-decoration: none; font-size: 14px; font-weight: 500;">
                 Open Dashboard
@@ -70,7 +88,7 @@ def send_notification_email(to_email: str, manager_name: str, subject: str, body
         </div>
         <div style="padding: 16px 32px; text-align: center;">
             <p style="color: #9ca3af; font-size: 11px; margin: 0;">
-                {datetime.utcnow().strftime("%B %d, %Y at %H:%M UTC")} &middot; MetaSource Automated Notification
+                {datetime.now(timezone.utc).strftime("%B %d, %Y at %H:%M UTC")} &middot; MetaSource Automated Notification
             </p>
         </div>
     </div>
@@ -81,7 +99,7 @@ def send_notification_email(to_email: str, manager_name: str, subject: str, body
     msg["To"] = to_email
     msg["Subject"] = f"[MetaSource] {subject}"
     msg.attach(MIMEText(body_text, "plain"))
-    msg.attach(MIMEText(html, "html"))
+    msg.attach(MIMEText(html_content, "html"))
 
     try:
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
@@ -93,7 +111,7 @@ def send_notification_email(to_email: str, manager_name: str, subject: str, body
             "email_sent",
             extra={
                 "extra_data": {
-                    "to_email": to_email,
+                    "to_email": masked,
                     "subject": subject,
                     "duration_ms": duration_ms,
                 }
@@ -105,7 +123,7 @@ def send_notification_email(to_email: str, manager_name: str, subject: str, body
             "email_send_failed",
             extra={
                 "extra_data": {
-                    "to_email": to_email,
+                    "to_email": masked,
                     "subject": subject,
                     "error": str(e),
                 }

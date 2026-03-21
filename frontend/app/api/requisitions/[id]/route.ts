@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
 import { prisma } from "@/lib/prisma";
 import { ChangeType } from "@prisma/client";
-import { publishChangeNotification } from "@/lib/sns";
 
 export async function GET(
   request: NextRequest,
@@ -40,6 +40,9 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const session = await getServerSession();
+    const changedBy = session?.user?.email || "system";
+
     const { id } = await params;
     const body = await request.json();
 
@@ -125,7 +128,7 @@ export async function PUT(
           oldValue: c.oldValue,
           newValue: c.newValue,
           summary: c.summary,
-          changedBy: "admin",
+          changedBy,
         })),
       });
 
@@ -146,21 +149,6 @@ export async function PUT(
         });
       }
 
-      // Publish SNS notification for each change batch
-      publishChangeNotification({
-        type: "UPDATED",
-        requisitionId: existing.requisitionId,
-        roleTitle: updated.roleTitle,
-        category: existing.category,
-        changes: changeRecords.map((c) => ({
-          field: c.fieldChanged,
-          oldValue: c.oldValue,
-          newValue: c.newValue,
-        })),
-        summary: changeRecords.map((c) => c.summary).join(". "),
-        changedBy: "admin",
-        timestamp: new Date().toISOString(),
-      });
     }
 
     return NextResponse.json(updated);
@@ -189,17 +177,6 @@ export async function DELETE(
     }
 
     await prisma.requisition.delete({ where: { id } });
-
-    // Publish SNS notification for deletion
-    publishChangeNotification({
-      type: "DELETED",
-      requisitionId: existing.requisitionId,
-      roleTitle: existing.roleTitle,
-      category: existing.category,
-      summary: `Requisition ${existing.requisitionId} (${existing.roleTitle}) has been deleted`,
-      changedBy: "admin",
-      timestamp: new Date().toISOString(),
-    });
 
     return NextResponse.json({ success: true }, { status: 200 });
   } catch (error) {

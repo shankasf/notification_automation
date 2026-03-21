@@ -24,14 +24,17 @@ spec:
           command: ["sh", "-c", "npm install --include=dev --ignore-scripts && npx prisma generate && npx prisma migrate deploy"]
           env:
             - name: DATABASE_URL
-              value: "postgresql://postgres:postgres@72.62.162.83:5432/meta_source?connection_limit=5&pool_timeout=10"
+              valueFrom:
+                secretKeyRef:
+                  name: db-secret
+                  key: DATABASE_URL
           resources:
             requests:
+              memory: "256Mi"
+              cpu: "50m"
+            limits:
               memory: "512Mi"
               cpu: "200m"
-            limits:
-              memory: "1Gi"
-              cpu: "500m"
           volumeMounts:
             - name: frontend-source
               mountPath: /app
@@ -47,11 +50,19 @@ spec:
             - name: NODE_ENV
               value: "production"
             - name: NODE_OPTIONS
-              value: "--max-old-space-size=2048"
+              value: "--max-old-space-size=1024"
             - name: NEXT_TELEMETRY_DISABLED
               value: "1"
             - name: DATABASE_URL
-              value: "postgresql://postgres:postgres@72.62.162.83:5432/meta_source?connection_limit=20&pool_timeout=10"
+              valueFrom:
+                secretKeyRef:
+                  name: db-secret
+                  key: DATABASE_URL
+            - name: NEXTAUTH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: auth-secret
+                  key: NEXTAUTH_SECRET
             - name: AI_SERVICE_URL
               value: "http://meta-ai:8000"
             - name: OPENAI_API_KEY
@@ -72,14 +83,14 @@ spec:
             - name: AWS_REGION
               value: "us-east-1"
             - name: SNS_ADMIN_EMAIL
-              value: "sagar@callsphere.tech"
+              value: ""
           resources:
             requests:
-              memory: "1Gi"
-              cpu: "500m"
+              memory: "512Mi"
+              cpu: "100m"
             limits:
-              memory: "3Gi"
-              cpu: "2000m"
+              memory: "1.5Gi"
+              cpu: "500m"
           volumeMounts:
             - name: frontend-source
               mountPath: /app
@@ -87,6 +98,97 @@ spec:
         - name: frontend-source
           hostPath:
             path: /home/ubuntu/apps/meta_test/frontend
+            type: Directory
+---
+# Gateway (Go/Gin)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: meta-gateway
+  namespace: meta-test
+  labels:
+    app: meta-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: meta-gateway
+  template:
+    metadata:
+      labels:
+        app: meta-gateway
+    spec:
+      containers:
+        - name: gateway
+          image: debian:bookworm-slim
+          imagePullPolicy: IfNotPresent
+          workingDir: /app
+          command: ["sh", "-c", "apt-get update && apt-get install -y ca-certificates && update-ca-certificates && ./server"]
+          ports:
+            - containerPort: 8080
+          env:
+            - name: PORT
+              value: "8080"
+            - name: PYTHON_BACKEND
+              value: "http://meta-ai:8000"
+            - name: DB_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: db-secret
+                  key: DB_HOST
+            - name: DB_PORT
+              valueFrom:
+                secretKeyRef:
+                  name: db-secret
+                  key: DB_PORT
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: db-secret
+                  key: DB_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: db-secret
+                  key: DB_PASSWORD
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: db-secret
+                  key: DB_NAME
+            - name: NEXTAUTH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: auth-secret
+                  key: NEXTAUTH_SECRET
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: aws-secret
+                  key: AWS_ACCESS_KEY_ID
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: aws-secret
+                  key: AWS_SECRET_ACCESS_KEY
+            - name: AWS_REGION
+              value: "us-east-1"
+            - name: SNS_ADMIN_EMAIL
+              value: ""
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "25m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
+          volumeMounts:
+            - name: gateway-source
+              mountPath: /app
+      volumes:
+        - name: gateway-source
+          hostPath:
+            path: /home/ubuntu/apps/meta_test/gateway
             type: Directory
 ---
 # AI Service (Python FastAPI)
@@ -119,19 +221,38 @@ spec:
             - name: PYTHONUNBUFFERED
               value: "1"
             - name: DATABASE_URL
-              value: "postgresql://postgres:postgres@72.62.162.83:5432/meta_source"
+              valueFrom:
+                secretKeyRef:
+                  name: db-secret
+                  key: DATABASE_URL
             - name: OPENAI_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: openai-secret
                   key: OPENAI_API_KEY
+            - name: SMTP_HOST
+              value: "email-smtp.us-east-1.amazonaws.com"
+            - name: SMTP_PORT
+              value: "587"
+            - name: SMTP_FROM
+              value: "noreply@callsphere.tech"
+            - name: SMTP_USER
+              valueFrom:
+                secretKeyRef:
+                  name: smtp-secret
+                  key: SMTP_USER
+            - name: SMTP_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: smtp-secret
+                  key: SMTP_PASS
           resources:
             requests:
-              memory: "512Mi"
-              cpu: "200m"
+              memory: "256Mi"
+              cpu: "50m"
             limits:
-              memory: "1Gi"
-              cpu: "1000m"
+              memory: "512Mi"
+              cpu: "300m"
           volumeMounts:
             - name: ai-source
               mountPath: /app

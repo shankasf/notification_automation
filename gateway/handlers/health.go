@@ -50,12 +50,12 @@ func DebugStats(c *gin.Context) {
 
 	dbStats := db.DB.Stats()
 
-	c.JSON(200, gin.H{
+	resp := gin.H{
 		"runtime": gin.H{
-			"goroutines":  runtime.NumGoroutine(),
-			"alloc_mb":    m.Alloc / 1024 / 1024,
-			"sys_mb":      m.Sys / 1024 / 1024,
-			"gc_cycles":   m.NumGC,
+			"goroutines": runtime.NumGoroutine(),
+			"alloc_mb":   m.Alloc / 1024 / 1024,
+			"sys_mb":     m.Sys / 1024 / 1024,
+			"gc_cycles":  m.NumGC,
 		},
 		"db_pool": gin.H{
 			"open":     dbStats.OpenConnections,
@@ -66,7 +66,14 @@ func DebugStats(c *gin.Context) {
 		"websocket": gin.H{
 			"connections": NotifHub.ConnCount(),
 		},
-	})
+	}
+
+	// Include SQS queue depths if SQS is initialized
+	if depths := GetQueueDepths(); depths != nil {
+		resp["sqs_queues"] = depths
+	}
+
+	c.JSON(200, resp)
 }
 
 func statusStr(ok bool) string {

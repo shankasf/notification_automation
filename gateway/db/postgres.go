@@ -13,11 +13,32 @@ import (
 var DB *sql.DB
 
 func Connect() error {
-	host := getEnv("DB_HOST", "72.62.162.83")
-	port := getEnv("DB_PORT", "5432")
-	user := getEnv("DB_USER", "postgres")
-	password := getEnv("DB_PASSWORD", "postgres")
-	dbname := getEnv("DB_NAME", "meta_source")
+	host := os.Getenv("DB_HOST")
+	port := os.Getenv("DB_PORT")
+	user := os.Getenv("DB_USER")
+	password := os.Getenv("DB_PASSWORD")
+	dbname := os.Getenv("DB_NAME")
+
+	// Fail fast if required credentials are missing
+	var missing []string
+	if host == "" {
+		missing = append(missing, "DB_HOST")
+	}
+	if port == "" {
+		missing = append(missing, "DB_PORT")
+	}
+	if user == "" {
+		missing = append(missing, "DB_USER")
+	}
+	if password == "" {
+		missing = append(missing, "DB_PASSWORD")
+	}
+	if dbname == "" {
+		missing = append(missing, "DB_NAME")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("required database environment variables not set: %v", missing)
+	}
 
 	dsn := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
 		host, port, user, password, dbname)
@@ -38,11 +59,4 @@ func Connect() error {
 
 	slog.Info("connected to PostgreSQL", "host", host, "db", dbname)
 	return nil
-}
-
-func getEnv(key, fallback string) string {
-	if val := os.Getenv(key); val != "" {
-		return val
-	}
-	return fallback
 }

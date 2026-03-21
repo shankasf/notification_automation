@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { z } from "zod";
 import { Button } from "@/app/components/ui/button";
 import { Input } from "@/app/components/ui/input";
@@ -65,6 +65,25 @@ export function RequisitionForm({ open, onClose, onSubmit, initialData }: Requis
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
+
+  // Reset form when dialog opens or initialData changes
+  useEffect(() => {
+    if (open) {
+      setFormData({
+        roleTitle: (initialData?.roleTitle as string) || "",
+        category: (initialData?.category as string) || "",
+        team: (initialData?.team as string) || "",
+        department: (initialData?.department as string) || "",
+        vendor: (initialData?.vendor as string) || "",
+        location: (initialData?.location as string) || "",
+        billRateHourly: (initialData?.billRateHourly as number) || 0,
+        headcountNeeded: (initialData?.headcountNeeded as number) || 1,
+        priority: (initialData?.priority as string) || "MEDIUM",
+        notes: (initialData?.notes as string) || "",
+      });
+      setErrors({});
+    }
+  }, [open, initialData]);
 
   const handleChange = (field: string, value: string | number) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
@@ -246,12 +265,16 @@ export function RequisitionForm({ open, onClose, onSubmit, initialData }: Requis
             </label>
             <Input
               type="number"
-              value={formData.billRateHourly}
+              value={formData.billRateHourly === 0 ? "" : formData.billRateHourly}
               onChange={(e) =>
-                handleChange("billRateHourly", parseFloat(e.target.value) || 0)
+                handleChange("billRateHourly", e.target.value === "" ? 0 : parseFloat(e.target.value))
               }
+              onFocus={(e) => {
+                if (Number(e.target.value) === 0) handleChange("billRateHourly", "" as unknown as number);
+              }}
               min={0}
               step={0.01}
+              placeholder="0.00"
             />
             {errors.billRateHourly && (
               <p className="text-xs text-red-500 mt-1">{errors.billRateHourly}</p>
@@ -267,7 +290,7 @@ export function RequisitionForm({ open, onClose, onSubmit, initialData }: Requis
               type="number"
               value={formData.headcountNeeded}
               onChange={(e) =>
-                handleChange("headcountNeeded", parseInt(e.target.value) || 1)
+                handleChange("headcountNeeded", e.target.value === "" ? 0 : parseInt(e.target.value))
               }
               min={1}
             />

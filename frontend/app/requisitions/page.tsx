@@ -53,7 +53,7 @@ function RequisitionsContent() {
 
   const userHeaders = (): HeadersInit => ({
     "Content-Type": "application/json",
-    "X-Changed-By": session?.user?.email || session?.user?.name || "user",
+    "X-Changed-By": session?.user?.email || "user",
   });
 
   const fetchData = useCallback((silent = false) => {
@@ -81,7 +81,7 @@ function RequisitionsContent() {
   // Auto-refetch silently when WS change event arrives
   useEffect(() => {
     if (changeSequence > 0) fetchData(true);
-  }, [changeSequence]);
+  }, [changeSequence, fetchData]);
 
   useEffect(() => {
     const timer = setTimeout(fetchData, 300);

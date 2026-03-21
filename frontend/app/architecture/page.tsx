@@ -14,6 +14,131 @@ export default function ArchitecturePage() {
           <ArrowLeft className="h-4 w-4" /> Back to Home
         </Link>
 
+        {/* ── High-Level System Design (non-technical) ── */}
+        <div className="mb-16">
+          <h2 className="text-2xl font-mono font-bold text-gray-900 mb-2">How MetaSource Works</h2>
+          <p className="text-sm text-gray-500 mb-8 font-mono">A simple overview of what happens behind the scenes</p>
+
+          <div className="flex justify-center overflow-x-auto">
+            <svg width={760} height={780} viewBox="0 0 760 780" className="max-w-full" style={{ fontFamily: "'Inter', -apple-system, sans-serif" }}>
+
+              {/* ── Step 1: Sourcing Manager ── */}
+              <rect x={250} y={10} width={260} height={64} rx={32} fill="#1e40af" />
+              <text x={380} y={38} textAnchor="middle" fontSize={15} fill="#fff" fontWeight="600">Sourcing Manager</text>
+              <text x={380} y={56} textAnchor="middle" fontSize={11} fill="#bfdbfe">Logs in with Google account</text>
+
+              <line x1={380} y1={74} x2={380} y2={106} stroke="#64748b" strokeWidth={1.5} />
+              <polygon points="376,102 384,102 380,110" fill="#64748b" />
+
+              {/* ── Step 2: Dashboard ── */}
+              <rect x={180} y={112} width={400} height={70} rx={12} fill="#f0f9ff" stroke="#3b82f6" strokeWidth={1.5} />
+              <text x={380} y={140} textAnchor="middle" fontSize={14} fill="#1e3a5f" fontWeight="600">Personal Dashboard</text>
+              <text x={380} y={158} textAnchor="middle" fontSize={11} fill="#64748b">See your hiring requests, budgets, headcount, and team status at a glance</text>
+
+              <line x1={380} y1={182} x2={380} y2={210} stroke="#64748b" strokeWidth={1.5} />
+              <polygon points="376,206 384,206 380,214" fill="#64748b" />
+
+              {/* ── Step 3: Daily Work ── */}
+              <rect x={120} y={216} width={520} height={70} rx={12} fill="#fff" stroke="#334155" strokeWidth={1.5} />
+              <text x={380} y={244} textAnchor="middle" fontSize={14} fill="#0f172a" fontWeight="600">Manage Hiring Requests</text>
+              <text x={380} y={262} textAnchor="middle" fontSize={11} fill="#64748b">Create, update, or upload hiring requests — change status, rates, headcount, vendors</text>
+
+              {/* Fan out to 3 paths */}
+              <line x1={380} y1={286} x2={380} y2={310} stroke="#64748b" strokeWidth={1.5} />
+              <line x1={130} y1={310} x2={630} y2={310} stroke="#64748b" strokeWidth={1.5} />
+              <line x1={130} y1={310} x2={130} y2={336} stroke="#64748b" strokeWidth={1.5} />
+              <line x1={380} y1={310} x2={380} y2={336} stroke="#64748b" strokeWidth={1.5} />
+              <line x1={630} y1={310} x2={630} y2={336} stroke="#64748b" strokeWidth={1.5} />
+              <polygon points="126,332 134,332 130,340" fill="#64748b" />
+              <polygon points="376,332 384,332 380,340" fill="#64748b" />
+              <polygon points="626,332 634,332 630,340" fill="#64748b" />
+
+              {/* ── Path A: Change Tracking ── */}
+              <rect x={30} y={342} width={200} height={80} rx={12} fill="#f8fafc" stroke="#475569" strokeWidth={1.5} />
+              <text x={130} y={368} textAnchor="middle" fontSize={13} fill="#0f172a" fontWeight="600">Every Change is</text>
+              <text x={130} y={384} textAnchor="middle" fontSize={13} fill="#0f172a" fontWeight="600">Tracked</text>
+              <text x={130} y={404} textAnchor="middle" fontSize={10} fill="#64748b">Who changed what, when,</text>
+              <text x={130} y={416} textAnchor="middle" fontSize={10} fill="#64748b">and what it was before</text>
+
+              {/* ── Path B: AI Monitoring ── */}
+              <rect x={280} y={342} width={200} height={80} rx={12} fill="#faf5ff" stroke="#8b5cf6" strokeWidth={1.5} />
+              <text x={380} y={368} textAnchor="middle" fontSize={13} fill="#4c1d95" fontWeight="600">AI Watches for</text>
+              <text x={380} y={384} textAnchor="middle" fontSize={13} fill="#4c1d95" fontWeight="600">Problems</text>
+              <text x={380} y={404} textAnchor="middle" fontSize={10} fill="#7c3aed">Unusual rates, budget overruns,</text>
+              <text x={380} y={416} textAnchor="middle" fontSize={10} fill="#7c3aed">stalled requests</text>
+
+              {/* ── Path C: AI Summaries ── */}
+              <rect x={530} y={342} width={200} height={80} rx={12} fill="#fffbeb" stroke="#d97706" strokeWidth={1.5} />
+              <text x={630} y={368} textAnchor="middle" fontSize={13} fill="#78350f" fontWeight="600">AI Summarizes</text>
+              <text x={630} y={384} textAnchor="middle" fontSize={13} fill="#78350f" fontWeight="600">Changes</text>
+              <text x={630} y={404} textAnchor="middle" fontSize={10} fill="#b45309">Groups changes by category</text>
+              <text x={630} y={416} textAnchor="middle" fontSize={10} fill="#b45309">and writes plain-English recaps</text>
+
+              {/* Merge lines back */}
+              <line x1={130} y1={422} x2={130} y2={460} stroke="#64748b" strokeWidth={1.5} />
+              <line x1={380} y1={422} x2={380} y2={460} stroke="#64748b" strokeWidth={1.5} />
+              <line x1={630} y1={422} x2={630} y2={460} stroke="#64748b" strokeWidth={1.5} />
+              <line x1={130} y1={460} x2={630} y2={460} stroke="#64748b" strokeWidth={1.5} />
+              <line x1={380} y1={460} x2={380} y2={486} stroke="#64748b" strokeWidth={1.5} />
+              <polygon points="376,482 384,482 380,490" fill="#64748b" />
+
+              {/* ── Step 4: Notifications ── */}
+              <rect x={180} y={492} width={400} height={70} rx={12} fill="#ecfdf5" stroke="#10b981" strokeWidth={1.5} />
+              <text x={380} y={520} textAnchor="middle" fontSize={14} fill="#064e3b" fontWeight="600">You Get Notified Automatically</text>
+              <text x={380} y={540} textAnchor="middle" fontSize={11} fill="#059669">In-app notification bell updates instantly + email sent to your inbox</text>
+
+              {/* Fan out to 2 */}
+              <line x1={380} y1={562} x2={380} y2={586} stroke="#64748b" strokeWidth={1.5} />
+              <line x1={220} y1={586} x2={540} y2={586} stroke="#64748b" strokeWidth={1.5} />
+              <line x1={220} y1={586} x2={220} y2={610} stroke="#64748b" strokeWidth={1.5} />
+              <line x1={540} y1={586} x2={540} y2={610} stroke="#64748b" strokeWidth={1.5} />
+              <polygon points="216,606 224,606 220,614" fill="#64748b" />
+              <polygon points="536,606 544,606 540,614" fill="#64748b" />
+
+              {/* ── In-App ── */}
+              <rect x={120} y={616} width={200} height={56} rx={28} fill="#3b82f6" />
+              <text x={220} y={641} textAnchor="middle" fontSize={13} fill="#fff" fontWeight="600">In-App Bell</text>
+              <text x={220} y={658} textAnchor="middle" fontSize={10} fill="#bfdbfe">Real-time, instant</text>
+
+              {/* ── Email ── */}
+              <rect x={440} y={616} width={200} height={56} rx={28} fill="#f59e0b" />
+              <text x={540} y={641} textAnchor="middle" fontSize={13} fill="#fff" fontWeight="600">Email Alert</text>
+              <text x={540} y={658} textAnchor="middle" fontSize={10} fill="#fef3c7">Delivered in 1-2 seconds</text>
+
+              {/* Merge back */}
+              <line x1={220} y1={672} x2={220} y2={700} stroke="#64748b" strokeWidth={1.5} />
+              <line x1={540} y1={672} x2={540} y2={700} stroke="#64748b" strokeWidth={1.5} />
+              <line x1={220} y1={700} x2={540} y2={700} stroke="#64748b" strokeWidth={1.5} />
+              <line x1={380} y1={700} x2={380} y2={720} stroke="#64748b" strokeWidth={1.5} />
+              <polygon points="376,716 384,716 380,724" fill="#64748b" />
+
+              {/* ── Step 5: AI Chat ── */}
+              <rect x={200} y={726} width={360} height={46} rx={23} fill="#f0f9ff" stroke="#3b82f6" strokeWidth={1.5} />
+              <text x={380} y={748} textAnchor="middle" fontSize={13} fill="#1e3a5f" fontWeight="600">Ask AI anything about your hiring data</text>
+              <text x={380} y={764} textAnchor="middle" fontSize={10} fill="#64748b">&quot;What&apos;s my average bill rate for engineering?&quot;</text>
+
+            </svg>
+          </div>
+
+          {/* Simple legend */}
+          <div className="mt-6 flex flex-wrap justify-center gap-6 text-xs font-mono">
+            <div className="flex items-center gap-2">
+              <div className="w-4 h-3 rounded-full bg-[#1e40af]" />
+              <span className="text-gray-600">You (the manager)</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-4 h-3 rounded bg-[#faf5ff] border border-[#8b5cf6]" />
+              <span className="text-gray-600">AI-powered</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-4 h-3 rounded bg-[#ecfdf5] border border-[#10b981]" />
+              <span className="text-gray-600">Automated notifications</span>
+            </div>
+          </div>
+        </div>
+
+        <hr className="border-gray-200 my-10" />
+
         <div className="flex justify-center overflow-x-auto">
           <svg width={720} height={820} viewBox="0 0 720 820" className="max-w-full" style={{ fontFamily: "'Courier New', Courier, monospace" }}>
             {/* Title */}

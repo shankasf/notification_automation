@@ -1,23 +1,24 @@
 import asyncio
 import os
+import sys
 import uuid
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import psycopg2
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 load_dotenv()
 
-# Set DATABASE_URL default if not in env
+# Fail fast if DATABASE_URL is not configured
 if not os.environ.get("DATABASE_URL"):
-    os.environ["DATABASE_URL"] = (
-        "postgresql://postgres:postgres@72.62.162.83:5432/meta_source"
-    )
+    print("FATAL: DATABASE_URL environment variable is not set. Exiting.", file=sys.stderr)
+    sys.exit(1)
 
 from logging_config import setup_logging, get_logger
 
@@ -32,6 +33,10 @@ if os.environ.get("DISABLE_OPENAI_TRACING", "").lower() in ("1", "true"):
     set_tracing_disabled(True)
     logger.info("OpenAI tracing disabled via DISABLE_OPENAI_TRACING")
 
+from guardrails.prompt_guard import check_prompt_injection, validate_input_length
+from guardrails.pii_scanner import redact_text, has_pii
+from guardrails.file_validator import validate_upload, scan_file_pii
+from guardrails.output_sanitizer import hash_response
 from ai_agents.change_detector import detect_changes
 from ai_agents.summarizer import summarize_changes
 from ai_agents.anomaly_detector import detect_anomalies
@@ -45,10 +50,10 @@ app = FastAPI(title="MetaSource AI Service", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://meta-gateway:8080", "http://localhost:8080"],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Origin", "Content-Type", "Authorization", "Accept", "X-Request-ID"],
 )
 
 # In-memory session store for chat continuity
@@ -161,7 +166,7 @@ class UploadProcessResponse(BaseModel):
 
 
 @app.post("/api/ai/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
+async def chat(request: ChatRequest, request_obj: Request):
     """Natural language query agent - answers questions about workforce data."""
     session_id = request.sessionId or str(uuid.uuid4())
     logger.info(
@@ -174,18 +179,47 @@ async def chat(request: ChatRequest):
             }
         },
     )
+
+    # ── Input guardrails ──────────────────────────────────────────────
+    if not validate_input_length(request.message):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Message too long (max 10,000 characters)"},
+        )
+
+    blocked, reason = check_prompt_injection(request.message)
+    if blocked:
+        logger.warning(
+            "prompt_injection_blocked",
+            extra={"extra_data": {"reason": reason, "session_id": session_id}},
+        )
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"Message blocked: {reason}"},
+        )
+
+    # Read user identity from gateway headers (for scope validation)
+    user_email = request_obj.headers.get("x-user-email", "unknown")
+    user_role = request_obj.headers.get("x-user-role", "")
+    user_category = request_obj.headers.get("x-manager-category", "")
+
     try:
         with trace("Chat Query", group_id=session_id):
             with custom_span("chat_endpoint"):
                 response_text = await process_query(
-                    request.message, request.managerId
+                    request.message,
+                    request.managerId,
+                    category=user_category or None,
                 )
+        response_hash = hash_response(response_text)
         logger.info(
             "chat_response",
             extra={
                 "extra_data": {
                     "session_id": session_id,
                     "response_length": len(response_text),
+                    "response_hash": response_hash,
+                    "user_email": user_email,
                 }
             },
         )
@@ -356,7 +390,7 @@ async def notify_anomaly(request: NotifyAnomalyRequest):
     caller can decide whether to create in-app notifications for them.
     """
     logger.info(
-        "notify_anomaly_request",
+        "notify_anomaly_request_disabled",
         extra={
             "extra_data": {
                 "category": request.category,
@@ -365,6 +399,9 @@ async def notify_anomaly(request: NotifyAnomalyRequest):
             }
         },
     )
+    # Anomaly notifications temporarily disabled
+    return {"sent": 0, "skipped": len(request.anomalies), "newAnomalies": [], "disabled": True}
+
     sent = 0
     skipped = 0
     new_anomalies: list[dict] = []
@@ -440,10 +477,51 @@ async def notify_anomaly(request: NotifyAnomalyRequest):
     return {"sent": sent, "skipped": skipped, "newAnomalies": new_anomalies}
 
 
+# ── Manager email notification ───────────────────────────────────────────
+
+
+class SendEmailRequest(BaseModel):
+    managerId: str
+    subject: str
+    body: str
+    notifType: str = "CHANGE_SUMMARY"
+
+
+@app.post("/api/ai/send-email")
+async def send_email(request: SendEmailRequest):
+    """Send an email notification to a manager."""
+    logger.info(
+        "send_email_request",
+        extra={
+            "extra_data": {
+                "manager_id": request.managerId,
+                "subject": request.subject,
+                "notif_type": request.notifType,
+            }
+        },
+    )
+    success = send_manager_notification(
+        request.managerId, request.subject, request.body, request.notifType
+    )
+    return {"sent": success}
+
+
 # ── Data Upload Pipeline ─────────────────────────────────────────────────
 
-# Track running jobs
+# Track running jobs (with timestamps for cleanup)
 _upload_jobs: dict[str, dict] = {}
+_UPLOAD_JOB_TTL_SECONDS = 3600  # 1 hour
+
+
+def _cleanup_old_jobs():
+    """Remove upload job results older than TTL to prevent memory leaks."""
+    now = time.time()
+    expired = [
+        jid for jid, data in _upload_jobs.items()
+        if now - data.get("_stored_at", 0) > _UPLOAD_JOB_TTL_SECONDS
+    ]
+    for jid in expired:
+        del _upload_jobs[jid]
 
 
 @app.post("/api/ai/upload/process", response_model=UploadProcessResponse)
@@ -466,6 +544,27 @@ async def process_upload(request: UploadProcessRequest):
 
         raw_bytes = base64.b64decode(request.rawBytes)
 
+    # ── File validation guardrails ────────────────────────────────────
+    if raw_bytes:
+        filename = f"{request.jobId}.{request.fileType}"
+        valid, reason = validate_upload(raw_bytes, filename)
+        if not valid:
+            return JSONResponse(
+                status_code=400,
+                content={"error": f"File rejected: {reason}"},
+            )
+
+    # Scan text content for PII
+    if request.fileContent:
+        pii_findings = scan_file_pii(request.fileContent)
+        if pii_findings:
+            logger.warning(
+                "pii_in_upload",
+                extra={"extra_data": {"findings_count": len(pii_findings), "job_id": request.jobId}},
+            )
+            # Redact PII from file content before processing
+            request.fileContent = redact_text(request.fileContent)
+
     try:
         with trace("Upload Pipeline", metadata={"job_id": request.jobId, "file_type": request.fileType}):
             with custom_span("upload_pipeline_execution"):
@@ -475,6 +574,8 @@ async def process_upload(request: UploadProcessRequest):
                     file_type=request.fileType,
                     raw_bytes=raw_bytes,
                 )
+        _cleanup_old_jobs()
+        result["_stored_at"] = time.time()
         _upload_jobs[request.jobId] = result
         logger.info(
             "upload_process_completed",
@@ -548,6 +649,8 @@ async def scheduled_summarize():
                     with custom_span(f"summarize_{category}"):
                         summary = await summarize_changes(changes, category)
 
+                    manager_id = None
+                    should_email = False
                     with custom_span(f"db_update_{category}"):
                         conn = psycopg2.connect(os.environ["DATABASE_URL"])
                         cur = conn.cursor()
@@ -565,6 +668,7 @@ async def scheduled_summarize():
                             row = cur.fetchone()
                             if row:
                                 manager_id = row[0]
+                                should_email = True
                                 cur.execute(
                                     '''INSERT INTO "Notification" (id, "managerId", type, title, message, "isRead", "createdAt")
                                        VALUES (gen_random_uuid(), %s, 'CHANGE_SUMMARY', 'Automated Change Summary', %s, false, NOW())''',
@@ -577,14 +681,14 @@ async def scheduled_summarize():
                                     "extra_data": {
                                         "category": category,
                                         "changes_updated": len(change_ids),
-                                        "notification_created": bool(row),
+                                        "notification_created": should_email,
                                     }
                                 },
                             )
                         finally:
                             conn.close()
 
-                    if row:
+                    if should_email and manager_id:
                         with custom_span(f"email_{category}"):
                             send_manager_notification(
                                 manager_id,
@@ -614,7 +718,7 @@ async def scheduled_anomaly_scan():
     """Run anomaly detection daily at 10 AM UTC."""
     while True:
         # Calculate seconds until next 10 AM UTC
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         target = now.replace(hour=10, minute=0, second=0, microsecond=0)
         if now >= target:
             target += timedelta(days=1)
@@ -734,5 +838,5 @@ async def start_schedulers():
     logger.info("starting_background_schedulers")
     ensure_table()
     asyncio.create_task(scheduled_summarize())
-    asyncio.create_task(scheduled_anomaly_scan())
+    # asyncio.create_task(scheduled_anomaly_scan())  # temporarily disabled
     logger.info("background_schedulers_started")

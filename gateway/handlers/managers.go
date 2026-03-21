@@ -18,7 +18,9 @@ func GetManagers(c *gin.Context) {
 		LEFT JOIN (
 			SELECT category, COUNT(*) as total,
 				SUM("headcountNeeded") - SUM("headcountFilled") as hc_gap
-			FROM "Requisition" GROUP BY category
+			FROM "Requisition"
+			WHERE status NOT IN ('COMPLETED', 'CANCELLED')
+			GROUP BY category
 		) r ON r.category = m.category
 		LEFT JOIN (
 			SELECT "managerId", COUNT(*) as unread

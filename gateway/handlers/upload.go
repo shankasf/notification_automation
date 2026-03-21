@@ -75,10 +75,31 @@ func UploadCSV(c *gin.Context) {
 	errors := []string{}
 	now := time.Now()
 
+	// Normalize human-readable category aliases to DB enum values
+	categoryAliases := map[string]string{
+		"engineering": "ENGINEERING_CONTRACTORS", "eng": "ENGINEERING_CONTRACTORS",
+		"engineering contractors": "ENGINEERING_CONTRACTORS", "tech": "ENGINEERING_CONTRACTORS",
+		"software": "ENGINEERING_CONTRACTORS",
+		"content": "CONTENT_TRUST_SAFETY", "cts": "CONTENT_TRUST_SAFETY",
+		"content & trust safety": "CONTENT_TRUST_SAFETY", "trust safety": "CONTENT_TRUST_SAFETY",
+		"content_trust_safety": "CONTENT_TRUST_SAFETY",
+		"data": "DATA_OPERATIONS", "dop": "DATA_OPERATIONS",
+		"data operations": "DATA_OPERATIONS", "data ops": "DATA_OPERATIONS",
+		"data_operations": "DATA_OPERATIONS",
+		"marketing": "MARKETING_CREATIVE", "mkt": "MARKETING_CREATIVE",
+		"marketing & creative": "MARKETING_CREATIVE", "marketing creative": "MARKETING_CREATIVE",
+		"marketing_creative": "MARKETING_CREATIVE",
+		"corporate": "CORPORATE_SERVICES", "cor": "CORPORATE_SERVICES",
+		"corporate services": "CORPORATE_SERVICES", "corporate_services": "CORPORATE_SERVICES",
+	}
+
 	abbrevMap := map[string]string{
 		"ENGINEERING_CONTRACTORS": "ENG", "CONTENT_TRUST_SAFETY": "CTS",
 		"DATA_OPERATIONS": "DOP", "MARKETING_CREATIVE": "MKT", "CORPORATE_SERVICES": "COR",
 	}
+
+	// Track per-category created counts for correct reqID sequencing
+	catCreatedCounts := map[string]int{}
 
 	for {
 		record, err := reader.Read()
@@ -97,7 +118,12 @@ func UploadCSV(c *gin.Context) {
 			return ""
 		}
 
-		cat := getCol("category")
+		rawCat := getCol("category")
+		cat := rawCat
+		// Normalize category: try alias lookup first, then accept if already a valid enum
+		if mapped, ok := categoryAliases[strings.ToLower(strings.TrimSpace(rawCat))]; ok {
+			cat = mapped
+		}
 		rate, _ := strconv.ParseFloat(getCol("billRateHourly"), 64)
 		hc, _ := strconv.Atoi(getCol("headcountNeeded"))
 		if hc == 0 {
@@ -106,14 +132,15 @@ func UploadCSV(c *gin.Context) {
 
 		abbrev := abbrevMap[cat]
 		if abbrev == "" {
-			abbrev = "GEN"
+			errors = append(errors, fmt.Sprintf("Row: Invalid category %q", rawCat))
+			continue
 		}
 		var maxNum int
 		db.DB.QueryRow(`
 			SELECT COALESCE(MAX(CAST(SUBSTRING("requisitionId" FROM '[0-9]+$') AS INTEGER)), 0)
 			FROM "Requisition" WHERE category = $1
 		`, cat).Scan(&maxNum)
-		reqID := fmt.Sprintf("REQ-%s-%03d", abbrev, maxNum+1+created)
+		reqID := fmt.Sprintf("REQ-%s-%03d", abbrev, maxNum+1+catCreatedCounts[cat])
 
 		id := uuid.New().String()
 		status := getCol("status")
@@ -159,6 +186,7 @@ func UploadCSV(c *gin.Context) {
 		`, chID, id, changedBy, fmt.Sprintf("Imported from CSV: %s - %s", reqID, getCol("roleTitle")), now)
 
 		created++
+		catCreatedCounts[cat]++
 	}
 
 	// Notify affected managers
@@ -177,7 +205,10 @@ func UploadCSV(c *gin.Context) {
 		for rows.Next() {
 			var cat, mid string
 			var cnt int
-			rows.Scan(&cat, &mid, &cnt)
+			if err := rows.Scan(&cat, &mid, &cnt); err != nil {
+				slog.Error("upload_notify_scan_error", "error", err)
+				continue
+			}
 			catCounts[cat] = cnt
 
 			notifID := uuid.New().String()

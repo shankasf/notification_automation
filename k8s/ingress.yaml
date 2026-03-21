@@ -16,6 +16,13 @@ spec:
     - host: meta.callsphere.tech
       http:
         paths:
+          - path: /api/auth
+            pathType: Prefix
+            backend:
+              service:
+                name: meta-frontend
+                port:
+                  number: 3000
           - path: /api/sns
             pathType: Prefix
             backend:

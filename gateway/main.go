@@ -1,9 +1,14 @@
 package main
 
 import (
+	"context"
 	"log"
 	"log/slog"
+	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"metasource-gateway/db"
 	"metasource-gateway/handlers"
@@ -35,62 +40,118 @@ func main() {
 	r.Use(middleware.CORSMiddleware())
 	r.Use(middleware.RateLimitMiddleware(100))
 
-	// ── Health ───────────────────────────────────────────────
+	// ── Public routes (no auth) ─────────────────────────────
 	r.GET("/health", handlers.HealthCheck(pythonURL))
 	r.GET("/api/health", handlers.HealthCheck(pythonURL))
 	r.GET("/api/debug/stats", handlers.DebugStats)
 
-	// ── WebSocket (real-time notifications) ──────────────────
+	// WebSocket (auth handled inside the handler via token query param)
 	r.GET("/ws/notifications", handlers.HandleWebSocket)
 
-	// ── Managers ─────────────────────────────────────────────
-	r.GET("/api/managers", handlers.GetManagers)
+	// ── Authenticated routes ────────────────────────────────
+	auth := r.Group("/")
+	auth.Use(middleware.AuthMiddleware())
+	auth.Use(middleware.AuditMiddleware())
+	auth.Use(middleware.RateLimitMiddleware(100)) // per-user rate limiting (uses user_email from auth)
 
-	// ── Stats ────────────────────────────────────────────────
-	r.GET("/api/stats", handlers.GetStats)
-
-	// ── Requisitions (direct DB) ─────────────────────────────
-	r.GET("/api/requisitions", handlers.ListRequisitions)
-	r.POST("/api/requisitions", handlers.CreateRequisition)
-	r.GET("/api/requisitions/:id", handlers.GetRequisition)
-	r.PUT("/api/requisitions/:id", handlers.UpdateRequisition)
-	r.DELETE("/api/requisitions/:id", handlers.DeleteRequisition)
-
-	// ── CSV Upload ───────────────────────────────────────────
-	r.POST("/api/requisitions/upload", handlers.UploadCSV)
-
-	// ── AI Service (proxy to Python) ─────────────────────────
-	aiProxy := handlers.GenericProxyHandler(pythonURL)
-	r.POST("/api/ai/chat", aiProxy)
-	r.POST("/api/ai/summarize", aiProxy)
-	r.POST("/api/ai/analyze", aiProxy)
-	r.POST("/api/ai/detect-changes", aiProxy)
-	r.POST("/api/ai/scrape", aiProxy)
-	r.GET("/api/ai/health", aiProxy)
-
-	// ── AI Data Upload (multi-format, multi-agent pipeline) ──
-	r.POST("/api/data-upload", handlers.DataUpload(pythonURL))
-	r.POST("/api/data-upload/progress", handlers.UploadProgress)
-	r.GET("/api/data-upload/:jobId/status", aiProxy)
-
-	// ── Notifications (direct DB) ────────────────────────────
-	r.GET("/api/notifications", handlers.ListNotifications)
-	r.PUT("/api/notifications", handlers.MarkNotificationsRead)
-
-	// ── Changes (direct DB) ──────────────────────────────────
-	r.GET("/api/changes", handlers.ListChanges)
-
-	// ── Market Rates (direct DB) ─────────────────────────────
-	r.GET("/api/market-rates", handlers.GetMarketRates)
-
-	// ── SNS Setup ───────────────────────────────────────────
-	r.POST("/api/sns/setup", handlers.SetupSNS)
-	r.GET("/api/sns/setup", handlers.GetSNSStatus)
-
-	slog.Info("starting gateway", "port", port, "python_backend", pythonURL)
-	if err := r.Run(":" + port); err != nil {
-		log.Fatalf("server failed: %v", err)
+	// -- Admin-only routes --
+	admin := auth.Group("/")
+	admin.Use(middleware.RequireRole("admin"))
+	{
+		admin.GET("/api/managers", handlers.GetManagers)
+		admin.POST("/api/data-upload", handlers.DataUpload(pythonURL))
+		admin.POST("/api/data-upload/progress", handlers.UploadProgress)
+		admin.POST("/api/sns/setup", handlers.SetupSNS)
 	}
+
+	// -- Admin + Manager routes --
+	authenticated := auth.Group("/")
+	authenticated.Use(middleware.RequireRole("admin", "manager"))
+	{
+		// Stats
+		authenticated.GET("/api/stats", handlers.GetStats)
+
+		// Requisitions (direct DB)
+		authenticated.GET("/api/requisitions", handlers.ListRequisitions)
+		authenticated.POST("/api/requisitions", handlers.CreateRequisition)
+		authenticated.GET("/api/requisitions/:id", handlers.GetRequisition)
+		authenticated.PUT("/api/requisitions/:id", handlers.UpdateRequisition)
+		authenticated.DELETE("/api/requisitions/:id", handlers.DeleteRequisition)
+
+		// CSV Upload
+		authenticated.POST("/api/requisitions/upload", handlers.UploadCSV)
+
+		// AI Service (proxy to Python)
+		aiProxy := handlers.GenericProxyHandler(pythonURL)
+		authenticated.POST("/api/ai/chat", aiProxy)
+		authenticated.POST("/api/ai/summarize", aiProxy)
+		authenticated.POST("/api/ai/analyze", aiProxy)
+		authenticated.POST("/api/ai/detect-changes", aiProxy)
+		authenticated.POST("/api/ai/scrape", aiProxy)
+		authenticated.GET("/api/ai/health", aiProxy)
+
+		// Data Upload status
+		authenticated.GET("/api/data-upload/:jobId/status", handlers.GenericProxyHandler(pythonURL))
+
+		// Notifications (direct DB)
+		authenticated.GET("/api/notifications", handlers.ListNotifications)
+		authenticated.PUT("/api/notifications", handlers.MarkNotificationsRead)
+
+		// Changes (direct DB)
+		authenticated.GET("/api/changes", handlers.ListChanges)
+
+		// Market Rates (direct DB)
+		authenticated.GET("/api/market-rates", handlers.GetMarketRates)
+
+		// SNS status (read-only)
+		authenticated.GET("/api/sns/setup", handlers.GetSNSStatus)
+	}
+
+	// ── Start SQS consumers ─────────────────────────────────
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	consumerWg := handlers.StartSQSConsumers(ctx)
+
+	// ── Create CloudWatch alarms (non-blocking, log-only on failure) ──
+	go func() {
+		handlers.CreateAlarms()
+	}()
+
+	// ── Start scheduled tasks (replaces Python cron jobs) ──
+	handlers.StartScheduledTasks(ctx, consumerWg)
+
+	// ── Start HTTP server with graceful shutdown ─────────────
+	srv := &http.Server{Addr: ":" + port, Handler: r}
+
+	go func() {
+		slog.Info("starting gateway", "port", port, "python_backend", pythonURL)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("server failed: %v", err)
+		}
+	}()
+
+	// Wait for interrupt signal
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
+	<-quit
+
+	slog.Info("shutting down...")
+
+	// Flush any pending audit log entries before connections close
+	middleware.FlushAuditLog()
+
+	// Stop SQS consumers first (cancel context, then wait for in-flight messages)
+	cancel()
+	consumerWg.Wait()
+
+	// Gracefully shut down the HTTP server with a 15-second deadline
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer shutdownCancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		slog.Error("server_shutdown_error", "error", err)
+	}
+
+	slog.Info("gateway stopped")
 }
 
 func getEnv(key, fallback string) string {

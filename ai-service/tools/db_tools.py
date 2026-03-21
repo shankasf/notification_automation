@@ -5,6 +5,7 @@ import json
 import time
 
 from logging_config import get_logger
+from guardrails.data_classifier import classifier
 
 logger = get_logger("tools.db")
 
@@ -89,6 +90,7 @@ def query_requisitions(
         }
         for r in rows
     ]
+    result = classifier.filter_for_llm(result, "Requisition")
     duration_ms = round((time.time() - start) * 1000, 2)
     logger.info(
         "tool_query_requisitions_done",
@@ -154,6 +156,7 @@ def get_manager_stats(manager_category: str = None) -> str:
         }
         for r in rows
     ]
+    result = classifier.filter_for_llm(result, "Requisition")
     duration_ms = round((time.time() - start) * 1000, 2)
     logger.info(
         "tool_get_manager_stats_done",
@@ -210,6 +213,7 @@ def get_budget_overview(category: str = None) -> str:
         }
         for r in rows
     ]
+    result = classifier.filter_for_llm(result, "Requisition")
     duration_ms = round((time.time() - start) * 1000, 2)
     logger.info(
         "tool_get_budget_overview_done",
@@ -269,6 +273,7 @@ def get_headcount_gaps(category: str = None) -> str:
         }
         for r in rows
     ]
+    result = classifier.filter_for_llm(result, "Requisition")
     duration_ms = round((time.time() - start) * 1000, 2)
     logger.info(
         "tool_get_headcount_gaps_done",
@@ -327,6 +332,7 @@ def get_vendor_analysis(category: str = None) -> str:
         }
         for r in rows
     ]
+    result = classifier.filter_for_llm(result, "Requisition")
     duration_ms = round((time.time() - start) * 1000, 2)
     logger.info(
         "tool_get_vendor_analysis_done",
@@ -338,6 +344,68 @@ def get_vendor_analysis(category: str = None) -> str:
         },
     )
     return json.dumps(result)
+
+
+@function_tool
+def get_recent_changes(category: str = None, hours: int = 24) -> str:
+    """Get recent changes to hiring requests (created, updated, status changes, rate changes, etc.) within the last N hours.
+    Use this tool when the user asks what changed, what's new, what happened today, or about recent updates/activity.
+    category must be one of: ENGINEERING_CONTRACTORS, CONTENT_TRUST_SAFETY, DATA_OPERATIONS, MARKETING_CREATIVE, CORPORATE_SERVICES."""
+    logger.info(
+        "tool_get_recent_changes",
+        extra={"extra_data": {"category": category, "hours": hours}},
+    )
+    start = time.time()
+    conn = get_conn()
+    cur = conn.cursor()
+    conditions = ['rc."createdAt" >= NOW() - (%s * INTERVAL \'1 hour\')']
+    params: list = [hours]
+    if category:
+        conditions.append("r.category = %s")
+        params.append(category)
+
+    where = "WHERE " + " AND ".join(conditions)
+    cur.execute(
+        f"""SELECT rc.id, rc."changeType", rc."fieldChanged", rc."oldValue", rc."newValue",
+                   rc."changedBy", rc.summary, rc."createdAt",
+                   r."requisitionId", r."roleTitle", r.category
+            FROM "RequisitionChange" rc
+            JOIN "Requisition" r ON rc."requisitionId" = r.id
+            {where}
+            ORDER BY rc."createdAt" DESC
+            LIMIT 50""",
+        params,
+    )
+    rows = cur.fetchall()
+    conn.close()
+
+    result = [
+        {
+            "changeType": r[1],
+            "fieldChanged": r[2],
+            "oldValue": r[3],
+            "newValue": r[4],
+            "changedBy": r[5],
+            "summary": r[6],
+            "changedAt": r[7].isoformat() if r[7] else None,
+            "requisitionId": r[8],
+            "roleTitle": r[9],
+            "category": r[10],
+        }
+        for r in rows
+    ]
+    result = classifier.filter_for_llm(result, "Requisition")
+    duration_ms = round((time.time() - start) * 1000, 2)
+    logger.info(
+        "tool_get_recent_changes_done",
+        extra={
+            "extra_data": {
+                "changes_returned": len(result),
+                "duration_ms": duration_ms,
+            }
+        },
+    )
+    return json.dumps(result, default=str)
 
 
 @function_tool

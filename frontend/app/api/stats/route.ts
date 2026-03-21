@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { RequisitionCategory } from "@prisma/client";
+import { RequisitionCategory, RequisitionStatus } from "@prisma/client";
 
 export async function GET(request: NextRequest) {
   try {
@@ -20,11 +20,16 @@ export async function GET(request: NextRequest) {
     }
 
     const where = categoryFilter ? { category: categoryFilter } : {};
+    // Active-only filter: exclude completed/cancelled for headline stats
+    const activeWhere = {
+      ...where,
+      status: { notIn: [RequisitionStatus.COMPLETED, RequisitionStatus.CANCELLED] },
+    };
 
     const [totalReqs, aggregates, criticalCount, byCategory, byStatus] = await Promise.all([
-      prisma.requisition.count({ where }),
+      prisma.requisition.count({ where: activeWhere }),
       prisma.requisition.aggregate({
-        where,
+        where: activeWhere,
         _sum: {
           headcountNeeded: true,
           headcountFilled: true,
@@ -33,13 +38,14 @@ export async function GET(request: NextRequest) {
         },
       }),
       prisma.requisition.count({
-        where: { ...where, priority: "CRITICAL" },
+        where: { ...activeWhere, priority: "CRITICAL" },
       }),
       prisma.requisition.groupBy({
         by: ["category"],
-        where,
+        where: activeWhere,
         _count: { id: true },
       }),
+      // Status distribution chart shows ALL statuses (including completed/cancelled)
       prisma.requisition.groupBy({
         by: ["status"],
         where,

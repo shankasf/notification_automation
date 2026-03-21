@@ -13,9 +13,12 @@ export async function GET() {
       orderBy: { name: "asc" },
     });
 
-    // Get requisition stats per category
+    // Get requisition stats per category (exclude completed/cancelled)
     const reqStats = await prisma.requisition.groupBy({
       by: ["category"],
+      where: {
+        status: { notIn: ["COMPLETED", "CANCELLED"] },
+      },
       _count: { id: true },
       _sum: {
         headcountNeeded: true,

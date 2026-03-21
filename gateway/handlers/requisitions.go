@@ -112,7 +112,7 @@ func ListRequisitions(c *gin.Context) {
 	rows, err := db.DB.Query(query, args...)
 	if err != nil {
 		slog.Error("list_requisitions_error", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to query hiring requests"})
 		return
 	}
 	defer rows.Close()
@@ -126,10 +126,13 @@ func ListRequisitions(c *gin.Context) {
 		var notes *string
 		var createdAt, updatedAt time.Time
 
-		rows.Scan(&id, &reqID, &team, &dept, &role, &cat,
+		if err := rows.Scan(&id, &reqID, &team, &dept, &role, &cat,
 			&hcNeeded, &hcFilled, &vendor, &rate,
 			&loc, &st, &pri, &budgetAlloc, &budgetSpent,
-			&startDate, &endDate, &notes, &createdAt, &updatedAt)
+			&startDate, &endDate, &notes, &createdAt, &updatedAt); err != nil {
+			slog.Error("list_requisitions_scan_error", "error", err)
+			continue
+		}
 
 		reqs = append(reqs, gin.H{
 			"id": id, "requisitionId": reqID, "team": team, "department": dept,
@@ -225,9 +228,12 @@ func checkManagerAuth(c *gin.Context, reqCategory string) bool {
 		return true // admin can edit anything
 	}
 	var cat string
-	db.DB.QueryRow(`SELECT category FROM "SourcingManager" WHERE id = $1`, managerID).Scan(&cat)
-	if cat == "" {
-		return true // unknown manager, allow (no category constraint)
+	err := db.DB.QueryRow(`SELECT category FROM "SourcingManager" WHERE id = $1`, managerID).Scan(&cat)
+	if err != nil || cat == "" {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": fmt.Sprintf("Unknown manager ID: %s", managerID),
+		})
+		return false
 	}
 	if cat != reqCategory {
 		c.JSON(http.StatusForbidden, gin.H{
@@ -301,7 +307,7 @@ func CreateRequisition(c *gin.Context) {
 		VALUES ($1, $2, 'CREATED', $3, $4, $5)
 	`, changeID, id, changedBy, fmt.Sprintf("New hiring request %s created: %s at %s", reqID, body.RoleTitle, body.Location), now)
 
-	// Broadcast via WebSocket
+	// Broadcast via WebSocket + create in-app notification
 	var managerID string
 	db.DB.QueryRow(`SELECT id FROM "SourcingManager" WHERE category = $1`, body.Category).Scan(&managerID)
 	if managerID != "" {
@@ -310,6 +316,26 @@ func CreateRequisition(c *gin.Context) {
 			"changeType":    "CREATED",
 			"message":       fmt.Sprintf("New hiring request: %s - %s", reqID, body.RoleTitle),
 		})
+
+		// Create in-app notification
+		notifID := uuid.New().String()
+		msg := fmt.Sprintf("New hiring request: %s - %s", reqID, body.RoleTitle)
+		db.DB.Exec(`
+			INSERT INTO "Notification" (id, "managerId", type, title, message, "isRead", "createdAt")
+			VALUES ($1, $2, 'CHANGE_SUMMARY', 'Hiring Request Created', $3, false, NOW())
+		`, notifID, managerID, msg)
+
+		NotifHub.Broadcast(managerID, "notification", gin.H{
+			"id":      notifID,
+			"title":   "Hiring Request Created",
+			"message": msg,
+		})
+
+		// Send email for new hiring request (uses status_change rule)
+		NotifyManagerEmail(managerID, "STATUS_CHANGE",
+			fmt.Sprintf("New Hiring Request: %s - %s", reqID, body.RoleTitle),
+			fmt.Sprintf("A new hiring request %s has been created: %s at %s", reqID, body.RoleTitle, body.Location),
+		)
 	}
 
 	// SNS notification
@@ -321,9 +347,6 @@ func CreateRequisition(c *gin.Context) {
 		Summary:       fmt.Sprintf("New hiring request %s created: %s at %s", reqID, body.RoleTitle, body.Location),
 		ChangedBy:     changedBy,
 	})
-
-	// Auto-trigger anomaly detection
-	TriggerAnalysis(body.Category)
 
 	c.JSON(http.StatusCreated, gin.H{
 		"id": id, "requisitionId": reqID,
@@ -369,6 +392,11 @@ func UpdateRequisition(c *gin.Context) {
 
 	if err == sql.ErrNoRows {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Hiring request not found"})
+		return
+	}
+	if err != nil {
+		slog.Error("update_requisition_query_error", "error", err, "id", id)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch hiring request"})
 		return
 	}
 
@@ -486,6 +514,17 @@ func UpdateRequisition(c *gin.Context) {
 				"title":   "Hiring Request Updated",
 				"message": msg,
 			})
+
+			// Send email based on NotificationRule preferences
+			for _, ch := range changes {
+				changeType := fmt.Sprint(ch["type"])
+				field := fmt.Sprint(ch["field"])
+				oldVal := fmt.Sprint(ch["old"])
+				newVal := fmt.Sprint(ch["new"])
+				emailBody := fmt.Sprintf("%s — %s changed from %s to %s", reqIDStr, field, oldVal, newVal)
+				emailSubject := fmt.Sprintf("%s Updated: %s", reqIDStr, field)
+				NotifyManagerEmail(managerID, changeType, emailSubject, emailBody)
+			}
 		}
 
 		// SNS notification
@@ -512,9 +551,6 @@ func UpdateRequisition(c *gin.Context) {
 			ChangedBy:     changedBy,
 		})
 	}
-
-	// Auto-trigger anomaly detection
-	TriggerAnalysis(category)
 
 	c.JSON(http.StatusOK, gin.H{"updated": true, "changes": len(changes)})
 }
@@ -544,7 +580,7 @@ func DeleteRequisition(c *gin.Context) {
 		return
 	}
 
-	// Broadcast delete via WebSocket
+	// Broadcast delete via WebSocket + create in-app notification
 	var managerID string
 	db.DB.QueryRow(`SELECT id FROM "SourcingManager" WHERE category = $1`, category).Scan(&managerID)
 	if managerID != "" {
@@ -553,6 +589,26 @@ func DeleteRequisition(c *gin.Context) {
 			"changeType":    "DELETED",
 			"message":       fmt.Sprintf("Hiring request %s (%s) was deleted by %s", reqIDStr, roleTitle, changedBy),
 		})
+
+		// Create in-app notification
+		notifID := uuid.New().String()
+		msg := fmt.Sprintf("Hiring request %s (%s) was deleted", reqIDStr, roleTitle)
+		db.DB.Exec(`
+			INSERT INTO "Notification" (id, "managerId", type, title, message, "isRead", "createdAt")
+			VALUES ($1, $2, 'CHANGE_SUMMARY', 'Hiring Request Deleted', $3, false, NOW())
+		`, notifID, managerID, msg)
+
+		NotifHub.Broadcast(managerID, "notification", gin.H{
+			"id":      notifID,
+			"title":   "Hiring Request Deleted",
+			"message": msg,
+		})
+
+		// Send email for deletion (uses status_change rule)
+		NotifyManagerEmail(managerID, "STATUS_CHANGE",
+			fmt.Sprintf("Hiring Request Deleted: %s", reqIDStr),
+			fmt.Sprintf("Hiring request %s (%s) has been deleted by %s", reqIDStr, roleTitle, changedBy),
+		)
 	}
 
 	// SNS notification

@@ -1,16 +1,10 @@
 package handlers
 
 import (
-	"bytes"
-	"encoding/json"
 	"log/slog"
-	"net/http"
 	"os"
-	"time"
 
 	"metasource-gateway/db"
-
-	"github.com/google/uuid"
 )
 
 var pythonBackend = os.Getenv("PYTHON_BACKEND")
@@ -21,99 +15,48 @@ func init() {
 	}
 }
 
-// TriggerAnalysis fires an async anomaly detection for a category.
-// It calls the AI service to detect anomalies, then sends them through the
-// dedup endpoint FIRST — only genuinely new anomalies (not seen in the last
-// 24h) get an in-app notification and WebSocket broadcast.
+// TriggerAnalysis enqueues an anomaly detection request for a category.
+// The actual analysis work (AI service call, dedup, notification creation,
+// WebSocket broadcast) is performed by the SQS consumer in sqs_consumers.go.
 func TriggerAnalysis(category string) {
-	go func() {
-		client := &http.Client{Timeout: 30 * time.Second}
-		body, _ := json.Marshal(map[string]string{"category": category})
-		resp, err := client.Post(pythonBackend+"/api/ai/analyze", "application/json", bytes.NewReader(body))
-		if err != nil {
-			slog.Warn("auto_analyze_failed", "category", category, "error", err)
-			return
-		}
-		defer resp.Body.Close()
+	EnqueueAnalysis(category)
+}
 
-		if resp.StatusCode != 200 {
-			return
-		}
+// ruleTypeForChange maps a RequisitionChange changeType to a NotificationRule ruleType.
+func ruleTypeForChange(changeType string) string {
+	switch changeType {
+	case "STATUS_CHANGE":
+		return "status_change"
+	case "RATE_CHANGE":
+		return "rate_change_threshold"
+	case "BUDGET_CHANGE":
+		return "budget_warning"
+	case "HEADCOUNT_CHANGE":
+		return "headcount_change"
+	default:
+		return ""
+	}
+}
 
-		var result struct {
-			Anomalies []struct {
-				Type          string  `json:"type"`
-				Description   string  `json:"description"`
-				Severity      string  `json:"severity"`
-				RequisitionId *string `json:"requisitionId"`
-			} `json:"anomalies"`
-		}
-		json.NewDecoder(resp.Body).Decode(&result)
+// NotifyManagerEmail checks NotificationRule preferences and enqueues an email
+// notification if the rule for this change type is enabled.
+// The synchronous DB rule check happens here; the actual HTTP POST to the
+// email service is performed by the SQS consumer in sqs_consumers.go.
+func NotifyManagerEmail(managerID, changeType, subject, body string) {
+	ruleType := ruleTypeForChange(changeType)
+	if ruleType == "" {
+		return
+	}
 
-		// Collect critical/high anomalies
-		var criticalAnomalies []map[string]interface{}
-		for _, a := range result.Anomalies {
-			if a.Severity == "critical" || a.Severity == "high" {
-				entry := map[string]interface{}{
-					"type":        a.Type,
-					"description": a.Description,
-					"severity":    a.Severity,
-				}
-				if a.RequisitionId != nil {
-					entry["requisitionId"] = *a.RequisitionId
-				}
-				criticalAnomalies = append(criticalAnomalies, entry)
-			}
-		}
+	var isEnabled bool
+	err := db.DB.QueryRow(
+		`SELECT "isEnabled" FROM "NotificationRule" WHERE "managerId" = $1 AND "ruleType" = $2`,
+		managerID, ruleType,
+	).Scan(&isEnabled)
+	if err != nil || !isEnabled {
+		slog.Info("email_skip_rule_disabled", "managerId", managerID, "ruleType", ruleType)
+		return
+	}
 
-		if len(criticalAnomalies) == 0 {
-			slog.Info("auto_analyze_complete", "category", category, "anomalies", 0)
-			return
-		}
-
-		// Send to dedup endpoint FIRST — it returns only the genuinely new ones
-		notifyBody, _ := json.Marshal(map[string]interface{}{
-			"anomalies": criticalAnomalies,
-			"category":  category,
-		})
-		notifyResp, notifyErr := client.Post(pythonBackend+"/api/ai/notify-anomaly", "application/json", bytes.NewReader(notifyBody))
-		if notifyErr != nil {
-			slog.Warn("notify_anomaly_failed", "category", category, "error", notifyErr)
-			return
-		}
-		defer notifyResp.Body.Close()
-
-		var dedupResult struct {
-			Sent         int                      `json:"sent"`
-			Skipped      int                      `json:"skipped"`
-			NewAnomalies []map[string]interface{} `json:"newAnomalies"`
-		}
-		json.NewDecoder(notifyResp.Body).Decode(&dedupResult)
-
-		// Only create in-app notifications for anomalies that passed dedup
-		if len(dedupResult.NewAnomalies) > 0 {
-			var managerID string
-			db.DB.QueryRow(`SELECT id FROM "SourcingManager" WHERE category = $1`, category).Scan(&managerID)
-			if managerID != "" {
-				for _, a := range dedupResult.NewAnomalies {
-					severity, _ := a["severity"].(string)
-					description, _ := a["description"].(string)
-					notifID := uuid.New().String()
-					msg := "[" + severity + "] " + description
-					db.DB.Exec(`INSERT INTO "Notification" (id, "managerId", type, title, message, "isRead", "createdAt")
-							   VALUES ($1, $2, 'ANOMALY_ALERT', 'Auto-Detected Anomaly', $3, false, NOW())`,
-						notifID, managerID, msg)
-
-					NotifHub.Broadcast(managerID, "notification", map[string]interface{}{
-						"id": notifID, "title": "Auto-Detected Anomaly", "message": msg,
-					})
-				}
-			}
-		}
-
-		slog.Info("auto_analyze_complete", "category", category,
-			"total_anomalies", len(result.Anomalies),
-			"new", len(dedupResult.NewAnomalies),
-			"skipped_duplicates", dedupResult.Skipped)
-	}()
+	EnqueueEmail(managerID, changeType, subject, body)
 }

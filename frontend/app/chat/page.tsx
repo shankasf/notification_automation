@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
-import { Send, Bot, User, Sparkles } from "lucide-react";
+import { Send, Bot, User, Sparkles, MessageSquarePlus } from "lucide-react";
 import { Button } from "@/app/components/ui/button";
 import { Card, CardContent } from "@/app/components/ui/card";
 
@@ -26,11 +26,33 @@ function ChatContent() {
   const searchParams = useSearchParams();
   const managerId = searchParams.get("manager");
 
-  const [messages, setMessages] = useState<Message[]>([]);
+  const storageKey = `chat_messages_${managerId || "admin"}`;
+
+  const [messages, setMessages] = useState<Message[]>(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      const saved = sessionStorage.getItem(storageKey);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return parsed.map((m: Message & { timestamp: string }) => ({
+          ...m,
+          timestamp: new Date(m.timestamp),
+        }));
+      }
+    } catch {}
+    return [];
+  });
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Persist messages to sessionStorage on every change
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(storageKey, JSON.stringify(messages));
+    } catch {}
+  }, [messages, storageKey]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -101,14 +123,34 @@ function ChatContent() {
     sendMessage(input);
   };
 
+  const startNewChat = () => {
+    setMessages([]);
+    try {
+      sessionStorage.removeItem(storageKey);
+    } catch {}
+    inputRef.current?.focus();
+  };
+
   return (
     <div className="flex flex-col h-[calc(100vh-8rem)]">
       {/* Header */}
-      <div className="mb-4">
-        <h1 className="text-2xl font-bold text-gray-900">AI Assistant</h1>
-        <p className="text-sm text-gray-500 mt-1">
-          Ask questions about your hiring requests, budgets, and workforce data
-        </p>
+      <div className="mb-4 flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">AI Assistant</h1>
+          <p className="text-sm text-gray-500 mt-1">
+            Ask questions about your hiring requests, budgets, and workforce data
+          </p>
+        </div>
+        {messages.length > 0 && (
+          <Button
+            variant="outline"
+            onClick={startNewChat}
+            className="flex items-center gap-2 rounded-xl"
+          >
+            <MessageSquarePlus className="h-4 w-4" />
+            New Chat
+          </Button>
+        )}
       </div>
 
       {/* Messages */}

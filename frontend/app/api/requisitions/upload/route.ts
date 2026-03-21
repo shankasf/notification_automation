@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import Papa from "papaparse";
-import { publishChangeNotification } from "@/lib/sns";
 
 const CATEGORY_MAP: Record<string, string> = {
   engineering: "ENGINEERING_CONTRACTORS",
@@ -208,9 +207,19 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Create notifications for affected managers
-    const managers = await prisma.sourcingManager.findMany();
-    for (const manager of managers) {
+    // Create notifications only for managers whose categories were affected
+    const affectedCategories = [...new Set(
+      rows
+        .map((row) => {
+          const rawCategory = (row.category || "").trim().toLowerCase();
+          return CATEGORY_MAP[rawCategory] || rawCategory.toUpperCase();
+        })
+        .filter((cat) => CATEGORY_SHORT_NAME[cat])
+    )];
+    const affectedManagers = await prisma.sourcingManager.findMany({
+      where: { category: { in: affectedCategories as never[] } },
+    });
+    for (const manager of affectedManagers) {
       await prisma.notification.create({
         data: {
           managerId: manager.id,
@@ -220,17 +229,6 @@ export async function POST(request: NextRequest) {
         },
       });
     }
-
-    // Publish SNS notification for bulk import
-    publishChangeNotification({
-      type: "BULK_IMPORT",
-      requisitionId: "BULK",
-      roleTitle: "CSV Import",
-      category: "ALL",
-      summary: `Bulk CSV import completed: ${created} created, ${updated} updated, ${errors.length} errors out of ${rows.length} total rows`,
-      changedBy: "csv_import",
-      timestamp: new Date().toISOString(),
-    });
 
     return NextResponse.json({
       created,

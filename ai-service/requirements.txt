@@ -8,3 +8,4 @@ beautifulsoup4==4.12.3
 pydantic>=2.0
 python-dotenv==1.0.1
 openpyxl>=3.1.0
+bleach>=6.0

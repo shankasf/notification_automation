@@ -17,14 +17,23 @@ func GetStats(c *gin.Context) {
 		db.DB.QueryRow(`SELECT category FROM "SourcingManager" WHERE id = $1`, managerID).Scan(&categoryFilter)
 	}
 
-	whereClause := ""
-	var args []interface{}
+	// Base filter: optional category
+	allWhereClause := ""
+	var allArgs []interface{}
 	if categoryFilter != "" {
-		whereClause = `WHERE category = $1`
-		args = append(args, categoryFilter)
+		allWhereClause = `WHERE category = $1`
+		allArgs = append(allArgs, categoryFilter)
 	}
 
-	// Totals
+	// Active filter: exclude completed/cancelled for headline stats
+	activeWhereClause := `WHERE status NOT IN ('COMPLETED', 'CANCELLED')`
+	var activeArgs []interface{}
+	if categoryFilter != "" {
+		activeWhereClause = `WHERE status NOT IN ('COMPLETED', 'CANCELLED') AND category = $1`
+		activeArgs = append(activeArgs, categoryFilter)
+	}
+
+	// Totals (active only)
 	var totalReqs int
 	var hcNeeded, hcFilled int
 	var budgetAlloc, budgetSpent float64
@@ -37,13 +46,13 @@ func GetStats(c *gin.Context) {
 			COALESCE(SUM("budgetAllocated"), 0),
 			COALESCE(SUM("budgetSpent"), 0),
 			COUNT(*) FILTER (WHERE priority = 'CRITICAL')
-		FROM "Requisition" `+whereClause, args...)
+		FROM "Requisition" `+activeWhereClause, activeArgs...)
 
 	row.Scan(&totalReqs, &hcNeeded, &hcFilled, &budgetAlloc, &budgetSpent, &criticalCount)
 
-	// By category
+	// By category (active only)
 	catRows, _ := db.DB.Query(`
-		SELECT category, COUNT(*) FROM "Requisition" ` + whereClause + ` GROUP BY category`, args...)
+		SELECT category, COUNT(*) FROM "Requisition" `+activeWhereClause+` GROUP BY category`, activeArgs...)
 	byCategory := gin.H{}
 	if catRows != nil {
 		defer catRows.Close()
@@ -55,9 +64,9 @@ func GetStats(c *gin.Context) {
 		}
 	}
 
-	// By status
+	// By status — includes ALL statuses for distribution chart
 	statusRows, _ := db.DB.Query(`
-		SELECT status, COUNT(*) FROM "Requisition" ` + whereClause + ` GROUP BY status`, args...)
+		SELECT status, COUNT(*) FROM "Requisition" `+allWhereClause+` GROUP BY status`, allArgs...)
 	byStatus := gin.H{}
 	if statusRows != nil {
 		defer statusRows.Close()

@@ -69,77 +69,85 @@ func initSNS() {
 
 // ChangeEvent represents a requisition change for SNS notification
 type ChangeEvent struct {
-	Type          string
-	RequisitionID string
-	RoleTitle     string
-	Category      string
-	Changes       []FieldChange
-	Summary       string
-	ChangedBy     string
+	Type          string        `json:"type"`
+	RequisitionID string        `json:"requisitionId"`
+	RoleTitle     string        `json:"roleTitle"`
+	Category      string        `json:"category"`
+	Changes       []FieldChange `json:"changes"`
+	Summary       string        `json:"summary"`
+	ChangedBy     string        `json:"changedBy"`
 }
 
 type FieldChange struct {
-	Field    string
-	OldValue string
-	NewValue string
+	Field    string `json:"field"`
+	OldValue string `json:"oldValue"`
+	NewValue string `json:"newValue"`
 }
 
-// PublishChange sends a change notification to SNS asynchronously
+// PublishChange enqueues a change notification for asynchronous SNS publishing.
+// The actual SNS publish is performed by the SQS consumer in sqs_consumers.go.
 func PublishChange(event ChangeEvent) {
-	go func() {
-		initSNS()
-		if snsInitErr != nil || snsClient == nil {
-			return
+	EnqueueSNSPublish(event)
+}
+
+// DoPublishSNS performs the actual SNS publish for a ChangeEvent.
+// Called by the SQS consumer — not directly by request handlers.
+func DoPublishSNS(event ChangeEvent) error {
+	initSNS()
+	if snsInitErr != nil || snsClient == nil {
+		return fmt.Errorf("SNS not initialized: %v", snsInitErr)
+	}
+
+	subject := fmt.Sprintf("[MetaSource] %s: %s — %s", event.Type, event.RequisitionID, event.RoleTitle)
+	runes := []rune(subject)
+	if len(runes) > 100 {
+		subject = string(runes[:97]) + "..."
+	}
+
+	var body strings.Builder
+	body.WriteString("MetaSource Hiring Request Change Notification\n")
+	body.WriteString("==================================================\n\n")
+	fmt.Fprintf(&body, "Type: %s\n", event.Type)
+	fmt.Fprintf(&body, "Request ID: %s\n", event.RequisitionID)
+	fmt.Fprintf(&body, "Role: %s\n", event.RoleTitle)
+	fmt.Fprintf(&body, "Category: %s\n", event.Category)
+	fmt.Fprintf(&body, "Changed By: %s\n", event.ChangedBy)
+	fmt.Fprintf(&body, "Time: %s\n\n", time.Now().Format(time.RFC3339))
+
+	if len(event.Changes) > 0 {
+		body.WriteString("Changes:\n")
+		body.WriteString("------------------------------\n")
+		for _, c := range event.Changes {
+			fmt.Fprintf(&body, "  %s: %s → %s\n", c.Field, c.OldValue, c.NewValue)
 		}
+		body.WriteString("\n")
+	}
 
-		subject := fmt.Sprintf("[MetaSource] %s: %s — %s", event.Type, event.RequisitionID, event.RoleTitle)
-		if len(subject) > 100 {
-			subject = subject[:97] + "..."
-		}
+	fmt.Fprintf(&body, "Summary: %s\n\n", event.Summary)
+	body.WriteString("---\nView details: https://meta.callsphere.tech/requisitions\n")
 
-		var body strings.Builder
-		body.WriteString("MetaSource Hiring Request Change Notification\n")
-		body.WriteString("==================================================\n\n")
-		fmt.Fprintf(&body, "Type: %s\n", event.Type)
-		fmt.Fprintf(&body, "Request ID: %s\n", event.RequisitionID)
-		fmt.Fprintf(&body, "Role: %s\n", event.RoleTitle)
-		fmt.Fprintf(&body, "Category: %s\n", event.Category)
-		fmt.Fprintf(&body, "Changed By: %s\n", event.ChangedBy)
-		fmt.Fprintf(&body, "Time: %s\n\n", time.Now().Format(time.RFC3339))
-
-		if len(event.Changes) > 0 {
-			body.WriteString("Changes:\n")
-			body.WriteString("------------------------------\n")
-			for _, c := range event.Changes {
-				fmt.Fprintf(&body, "  %s: %s → %s\n", c.Field, c.OldValue, c.NewValue)
-			}
-			body.WriteString("\n")
-		}
-
-		fmt.Fprintf(&body, "Summary: %s\n\n", event.Summary)
-		body.WriteString("---\nView details: https://meta.callsphere.tech/requisitions\n")
-
-		_, err := snsClient.Publish(context.Background(), &sns.PublishInput{
-			TopicArn: aws.String(topicARN),
-			Subject:  aws.String(subject),
-			Message:  aws.String(body.String()),
-			MessageAttributes: map[string]types.MessageAttributeValue{
-				"changeType": {
-					DataType:    aws.String("String"),
-					StringValue: aws.String(event.Type),
-				},
-				"category": {
-					DataType:    aws.String("String"),
-					StringValue: aws.String(event.Category),
-				},
+	_, err := snsClient.Publish(context.Background(), &sns.PublishInput{
+		TopicArn: aws.String(topicARN),
+		Subject:  aws.String(subject),
+		Message:  aws.String(body.String()),
+		MessageAttributes: map[string]types.MessageAttributeValue{
+			"changeType": {
+				DataType:    aws.String("String"),
+				StringValue: aws.String(event.Type),
 			},
-		})
-		if err != nil {
-			slog.Error("sns_publish_error", "error", err, "requisitionId", event.RequisitionID)
-			return
-		}
-		slog.Info("sns_published", "type", event.Type, "requisitionId", event.RequisitionID)
-	}()
+			"category": {
+				DataType:    aws.String("String"),
+				StringValue: aws.String(event.Category),
+			},
+		},
+	})
+	if err != nil {
+		slog.Error("sns_publish_error", "error", err, "requisitionId", event.RequisitionID)
+		return fmt.Errorf("SNS publish failed for %s: %w", event.RequisitionID, err)
+	}
+
+	slog.Info("sns_published", "type", event.Type, "requisitionId", event.RequisitionID)
+	return nil
 }
 
 // SetupSNS handles POST /api/sns/setup — creates topic and subscribes admin email
@@ -160,7 +168,8 @@ func SetupSNS(c *gin.Context) {
 		email = os.Getenv("SNS_ADMIN_EMAIL")
 	}
 	if email == "" {
-		email = "sagar@callsphere.tech"
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Email is required — set SNS_ADMIN_EMAIL or pass email in request body"})
+		return
 	}
 
 	// Check existing subscriptions
