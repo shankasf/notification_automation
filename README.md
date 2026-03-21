@@ -1,6 +1,6 @@
 # MetaSource — Intelligent Workforce Sourcing Platform
 
-A platform that helps sourcing managers track contractor hiring requests without any manual effort. When admin edits a hiring request — updates a bill rate, fills a position, changes status — the system instantly detects it and notifies the relevant category manager. When a manager makes changes, admin gets notified. Both sides get real-time WebSocket push, AI-generated summaries, and email alerts. All automatic.
+A platform that automates change detection, notifications, and analysis for contractor hiring requests. When an admin or manager edits a request, the system detects it, notifies the other side in real time, generates AI summaries, sends email alerts, and flags anomalies. All automatic.
 
 **Live**: [https://meta.callsphere.tech](https://meta.callsphere.tech)
 
@@ -8,38 +8,40 @@ A platform that helps sourcing managers track contractor hiring requests without
 
 ## What It Does
 
-Five sourcing managers each own a category of hiring requests (engineering contractors, content & trust/safety, data operations, marketing/creative, corporate services). The platform:
+Five sourcing managers each own a category (Engineering, Content & Trust/Safety, Data Operations, Marketing/Creative, Corporate Services). The platform:
 
-- **Detects every change** — field-level tracking captures exactly what changed, by whom (admin or manager), and when
-- **Routes notifications both ways** — admin edits notify the relevant manager; manager edits notify admin
-- **Updates dashboards in real time** — WebSocket push means counts and stats refresh instantly, no page reload needed
-- **Summarizes with AI** — instead of raw field diffs, managers get plain English summaries like "Bill rate for Senior DevOps increased from $75 to $95/hr"
-- **Sends email alerts** — every change triggers an email to the other side via AWS SNS
-- **Flags problems automatically** — AI scans for anomalies like price spikes, budget overruns, and stale requests
+- **Tracks every change** — field-level diffs capture what changed, by whom, and when
+- **Routes notifications bidirectionally** — admin edits notify the manager; manager edits notify admin
+- **Pushes updates in real time** — WebSocket refreshes dashboards instantly
+- **Summarizes with AI** — plain English summaries like "Bill rate for Senior DevOps increased from $75 to $95/hr"
+- **Sends email alerts** — every change triggers an email via AWS SNS
+- **Flags anomalies** — AI detects rate spikes, budget overruns, and stale requests
 
-### What Managers See
+### Pages
 
-| Page | What's There |
-|------|-------------|
-| **Home** | All 5 managers' active request counts, unfilled positions, and alert badges — updates live via WebSocket |
-| **Dashboard** | Stats cards (total requests, unfilled positions, budget, critical priority), category pie chart, status bar chart, recent changes timeline |
-| **Hiring Requests** | Full data grid with inline editing, status/priority dropdowns, search, filters, pagination, CSV upload |
-| **Notifications** | All alerts with read/unread state, AI-generated summaries |
-| **Change Log** | Complete audit trail of every field change across all requests |
-| **Market Rates** | Benchmarking data for contractor rates |
-| **AI Chat** | Ask questions in plain English — "What are the highest bill rates in engineering?" |
+| Page | Purpose |
+|------|---------|
+| **Home** | 5 manager cards with live metrics (active requests, unfilled positions, alerts) |
+| **Dashboard** | Stats cards, category pie chart, status bar chart, recent changes |
+| **Hiring Requests** | Data grid with inline editing, filters, pagination, CSV upload |
+| **Notifications** | Alerts with read/unread state and AI summaries |
+| **Change Log** | Full audit trail of every field change |
+| **Market Rates** | Contractor rate benchmarks by role/location |
+| **AI Chat** | Natural language Q&A — "What are the highest bill rates in engineering?" |
 
-### Admin vs Manager
+### Roles
 
-- **Admin** sees all 5 managers' data, can edit any category, access the data upload pipeline
-- **Managers** are auto-redirected to their own dashboard, can only edit their category's requests
-- **Notification routing is bidirectional** — when admin edits a request, the relevant category manager gets notified (WebSocket push, in-app notification, and email). When any manager edits a request, admin gets notified in real time via WebSocket. This applies across all 5 managers — every change triggers a notification to the other side
+| Role | Access |
+|------|--------|
+| **Admin** | All categories, all endpoints, data upload, manager config |
+| **Manager** | Own category only — auto-redirected to their dashboard |
+| **Viewer** | Read-only |
 
 ---
 
 ## How It Works
 
-### The Change Flow (What Happens When Admin or a Manager Edits a Request)
+### Change Flow
 
 ```
 Admin or manager changes status from OPEN to COMPLETED
@@ -66,43 +68,33 @@ The other side's browser receives WebSocket event
     |-- Notification badge increments
 ```
 
-### Real-Time Updates
-
-Every page that shows data listens for WebSocket events and silently refetches when something changes:
+### Real-Time WebSocket Events
 
 | Page | Listens For | What Refreshes |
 |------|-------------|----------------|
-| **Home page** | `change`, `notification`, `refresh` | All manager cards, total hiring requests, unfilled positions, alerts count |
-| **Dashboard** | `change`, `notification` | All stat cards, charts, recent changes |
-| **Hiring Requests** | `change` | Table data, total count, pagination |
-| **Notifications** | `notification`, `read` | Notification list, unread badge in sidebar |
+| **Home** | `change`, `notification`, `refresh` | Manager cards, request counts, alerts |
+| **Dashboard** | `change`, `notification` | Stats, charts, recent changes |
+| **Hiring Requests** | `change` | Table data, pagination |
+| **Notifications** | `notification`, `read` | Notification list, unread badge |
 
-The WebSocket hub routes messages correctly:
-- A change to an Engineering request goes to the Engineering manager's browser AND all admin browsers
-- Admin connections receive events for every manager
-
-### Active Request Counting
-
-The "Total Hiring Requests" and "Unfilled Positions" numbers on both the home page and dashboard **only count active requests**. Requests with status COMPLETED or CANCELLED are excluded from these headline numbers. The status distribution chart on the dashboard still shows all statuses for the full picture.
+The WebSocket hub routes by role: manager connections get their own category events; admin connections get all events.
 
 ### AI Features
 
-| Feature | What It Does | When It Runs |
-|---------|-------------|--------------|
-| **Change Summaries** | Turns "billRateHourly: 75 -> 95" into "Bill rate increased by 27% for Senior DevOps role" | Every 15 minutes (batch) |
-| **Anomaly Detection** | Flags rate spikes >10%, budgets >90% used, requests stale >30 days | On each change + daily scan |
-| **Chat Assistant** | Answers questions like "Which category has the most unfilled positions?" using 6 database query tools | On demand |
-| **Data Upload Pipeline** | Ingests CSV, Excel, JSON, or messy text files — AI cleans and normalizes data | Admin-triggered |
+| Feature | What It Does | When |
+|---------|-------------|------|
+| **Change Summaries** | "billRateHourly: 75 → 95" becomes "Bill rate increased 27% for Senior DevOps" | Every 15 min |
+| **Anomaly Detection** | Flags rate spikes >10%, budgets >90%, stale requests >30 days | On each change + hourly scan |
+| **Chat Assistant** | Answers questions using 6 database query tools | On demand |
+| **Data Upload** | Ingests CSV/Excel/JSON — AI cleans and normalizes | Admin-triggered |
 
-### Email Alerts (AWS SNS)
+### Active Request Counting
 
-Every change publishes to an SNS topic. Subscribe any email address via `POST /api/sns/setup` — AWS handles confirmation and delivery. No email server, no SMTP config, no worker process.
+Dashboard totals only count active statuses (OPEN through ACTIVE). COMPLETED and CANCELLED are excluded from headline numbers but appear in the status distribution chart.
 
 ---
 
 ## Architecture
-
-Three microservices behind Traefik (TLS ingress) on k3s:
 
 ```
 Browser
@@ -123,145 +115,243 @@ Go Gateway connects to:
 
 ### Services
 
-| Service | Technology | Role |
-|---------|-----------|------|
-| **Frontend** | Next.js 15, TypeScript, Tailwind CSS, shadcn/ui, Recharts | Dashboard UI, data grid, notification center, AI chat, Google OAuth |
-| **Gateway** | Go (Gin), Gorilla WebSocket, AWS SNS SDK | All CRUD APIs, real-time WebSocket push, change tracking, notification routing, CSV import, AI proxy |
-| **AI Service** | Python (FastAPI), OpenAI Agent SDK (gpt-4.1 / gpt-4.1-mini) | Summarization, anomaly detection, chat Q&A, data cleaning, market rates |
-| **Database** | PostgreSQL, Prisma (schema/migrations), raw SQL in Go | All data storage — requisitions, changes, notifications, managers, chat history |
+| Service | Stack | Role |
+|---------|-------|------|
+| **Frontend** | Next.js 15, TypeScript, Tailwind, shadcn/ui, Recharts | UI, auth, data grid, charts |
+| **Gateway** | Go (Gin), Gorilla WebSocket, AWS SDK | APIs, WebSocket, change tracking, SQS, SNS |
+| **AI Service** | Python (FastAPI), OpenAI Agent SDK | Summarization, anomaly detection, chat, data cleaning |
+| **Database** | PostgreSQL, Prisma (schema/migrations) | All data storage |
 
-### Database Tables
+```mermaid
+flowchart TB
+    subgraph Browser["Browser"]
+        FE[Next.js Frontend]
+    end
 
-9 tables in PostgreSQL, managed via Prisma ORM.
+    subgraph K8s["k3s Cluster"]
+        subgraph GW["Go Gateway"]
+            API[REST API + Auth Middleware]
+            WS[WebSocket Hub]
+            SQS_PROD[SQS Producers]
+            SQS_CONS[SQS Consumers]
+            SCHED[Scheduled Tasks]
+            AUDIT[Audit Logger]
+        end
 
-**SourcingManager** — 5 managers, each assigned one category
+        subgraph AI["Python AI Service"]
+            GUARD[Guardrails Layer]
+            LLM_PROXY[OpenAI Agent SDK]
+            TOOLS[DB Query Tools]
+        end
+    end
 
-| Column | Type | Notes |
-|--------|------|-------|
-| id | UUID | PK |
-| name | String | |
-| email | String | Unique |
-| category | RequisitionCategory | Enum |
-| avatarUrl | String? | |
-| createdAt | DateTime | Default: now |
+    subgraph AWS["AWS Services"]
+        SQS_Q["SQS Queues<br/>3 main + 3 DLQ"]
+        SNS[SNS Topic]
+        CW[CloudWatch<br/>Metrics + Alarms]
+        SM[Secrets Manager]
+    end
 
-**Requisition** — Hiring requests
+    subgraph DB["Database"]
+        PG[(PostgreSQL<br/>+ AuditLog<br/>+ DataClassification<br/>+ UserRole)]
+    end
 
-| Column | Type | Notes |
-|--------|------|-------|
-| id | UUID | PK |
-| requisitionId | String | Unique (display ID) |
-| team | String | |
-| department | String | |
-| roleTitle | String | |
-| category | RequisitionCategory | Enum |
-| headcountNeeded | Int | |
-| headcountFilled | Int | Default: 0 |
-| vendor | String | |
-| billRateHourly | Float | |
-| location | String | |
-| status | RequisitionStatus | Default: OPEN |
-| priority | Priority | Default: MEDIUM |
-| budgetAllocated | Float | |
-| budgetSpent | Float | Default: 0 |
-| startDate | DateTime? | |
-| endDate | DateTime? | |
-| notes | String? | |
-| createdAt | DateTime | Default: now |
-| updatedAt | DateTime | Auto-updated |
+    subgraph OpenAI["External"]
+        GPT[OpenAI API]
+    end
 
-**RequisitionChange** — Every field change with old/new values, AI summary
+    FE -->|"JWT Auth"| API
+    FE -->|"JWT Auth"| WS
+    API --> SQS_PROD
+    SQS_PROD --> SQS_Q
+    SQS_Q --> SQS_CONS
+    SQS_CONS --> SNS
+    SQS_CONS --> AI
+    SCHED --> AI
+    API -->|"X-User-Email<br/>X-User-Role"| AI
+    GUARD --> TOOLS
+    TOOLS -->|"filter_for_llm()"| LLM_PROXY
+    LLM_PROXY --> GPT
+    SQS_Q -->|"DLQ depth > 0"| CW
+    CW -->|"Alarm"| SNS
+    SM -->|"K8s ExternalSecret"| K8s
+    API --> AUDIT
+    AUDIT --> PG
+    TOOLS --> PG
+    API --> PG
+```
 
-| Column | Type | Notes |
-|--------|------|-------|
-| id | UUID | PK |
-| requisitionId | String | FK → Requisition (CASCADE) |
-| changeType | ChangeType | Enum |
-| fieldChanged | String? | |
-| oldValue | String? | |
-| newValue | String? | |
-| changedBy | String | Default: "system" |
-| summary | String? | AI-generated |
-| createdAt | DateTime | Default: now |
+---
 
-**Notification** — Per-manager alerts
+## SQS Queues
 
-| Column | Type | Notes |
-|--------|------|-------|
-| id | UUID | PK |
-| managerId | String | FK → SourcingManager (CASCADE) |
-| type | NotificationType | Enum |
-| title | String | |
-| message | String | |
-| isRead | Boolean | Default: false |
-| metadata | Json? | |
-| createdAt | DateTime | Default: now |
+Every async operation flows through SQS with automatic retry (3x) and dead-letter queues.
 
-**NotificationRule** — Per-manager filtering preferences
+| Queue | Type | Purpose | Concurrency | DLQ |
+|-------|------|---------|-------------|-----|
+| `metasource-analysis.fifo` | FIFO | AI anomaly detection per category | 1 | `metasource-analysis-dlq.fifo` |
+| `metasource-email` | Standard | Email notifications to managers | 3 | `metasource-email-dlq` |
+| `metasource-sns-publish` | Standard | SNS change event publishing | 2 | `metasource-sns-publish-dlq` |
 
-| Column | Type | Notes |
-|--------|------|-------|
-| id | UUID | PK |
-| managerId | String | FK → SourcingManager (CASCADE) |
-| ruleType | String | |
-| threshold | Float? | |
-| isEnabled | Boolean | Default: true |
-| createdAt | DateTime | Default: now |
+```mermaid
+flowchart LR
+    subgraph Trigger["Requisition Change"]
+        CREATE[Create/Update/Delete]
+    end
 
-**MarketRate** — Contractor rate benchmarks
+    subgraph Producers["Gateway Producers (sync, <50ms)"]
+        EA[EnqueueAnalysis]
+        EE[EnqueueEmail]
+        ES[EnqueueSNSPublish]
+    end
 
-| Column | Type | Notes |
-|--------|------|-------|
-| id | UUID | PK |
-| roleTitle | String | |
-| category | RequisitionCategory | Enum |
-| location | String | |
-| minRate | Float | |
-| maxRate | Float | |
-| medianRate | Float | |
-| source | String | |
-| scrapedAt | DateTime | Default: now |
+    subgraph Queues["SQS Queues"]
+        Q1["analysis.fifo<br/>Visibility: 120s"]
+        Q2["email<br/>Visibility: 30s"]
+        Q3["sns-publish<br/>Visibility: 30s"]
+        DLQ1["analysis-dlq.fifo"]
+        DLQ2["email-dlq"]
+        DLQ3["sns-publish-dlq"]
+    end
 
-**ChatSession** — AI chat conversation history
+    subgraph Consumers["Gateway Consumers (long-polling)"]
+        C1["processAnalysis<br/>Concurrency: 1"]
+        C2["processEmail<br/>Concurrency: 3"]
+        C3["processSNSPublish<br/>Concurrency: 2"]
+    end
 
-| Column | Type | Notes |
-|--------|------|-------|
-| id | UUID | PK |
-| managerId | String? | |
-| messages | Json | Default: [] |
-| createdAt | DateTime | Default: now |
-| updatedAt | DateTime | Auto-updated |
+    CREATE --> EA & EE & ES
+    EA --> Q1
+    EE --> Q2
+    ES --> Q3
+    Q1 --> C1
+    Q2 --> C2
+    Q3 --> C3
+    Q1 -->|"3 failures"| DLQ1
+    Q2 -->|"3 failures"| DLQ2
+    Q3 -->|"3 failures"| DLQ3
+```
 
-**AnomalyFingerprint** — 24h dedup for anomaly notifications
+### Scheduled Tasks
 
-| Column | Type | Notes |
-|--------|------|-------|
-| id | UUID | PK |
-| fingerprint | String | Indexed with createdAt |
-| category | String | |
-| severity | String | |
-| managerId | String? | |
-| createdAt | DateTime | Default: now |
+| Task | Interval | Purpose |
+|------|----------|---------|
+| Summarization | 15 min | Detect unsummarized changes, generate AI summaries |
+| Anomaly Scan | 1 hour | Run anomaly detection across all 5 categories |
 
-**ScrapeLog** — Web scraping history
+---
 
-| Column | Type | Notes |
-|--------|------|-------|
-| id | UUID | PK |
-| source | String | |
-| rolesScraped | Int | |
-| status | String | |
-| duration | Int | |
-| error | String? | |
-| createdAt | DateTime | Default: now |
+## Security & Compliance
 
-**Enums**: RequisitionCategory (5 values: ENGINEERING_CONTRACTORS, CONTENT_TRUST_SAFETY, DATA_OPERATIONS, MARKETING_CREATIVE, CORPORATE_SERVICES) · RequisitionStatus (8: OPEN → SOURCING → INTERVIEWING → OFFER → ONBOARDING → ACTIVE → COMPLETED, CANCELLED) · Priority (4: CRITICAL, HIGH, MEDIUM, LOW) · ChangeType (7: CREATED, UPDATED, STATUS_CHANGE, RATE_CHANGE, HEADCOUNT_CHANGE, BUDGET_CHANGE, BULK_IMPORT) · NotificationType (4: CHANGE_SUMMARY, ANOMALY_ALERT, BUDGET_WARNING, MILESTONE)
+### RBAC
 
-### Requisition Statuses
+```mermaid
+flowchart TB
+    subgraph Request["Incoming Request"]
+        JWT["Authorization: Bearer <NextAuth JWT>"]
+    end
 
-OPEN → SOURCING → INTERVIEWING → OFFER → ONBOARDING → ACTIVE → COMPLETED
+    subgraph Auth["Gateway Auth Middleware"]
+        VALIDATE["Validate JWT<br/>(HS256 + NEXTAUTH_SECRET)"]
+        LOOKUP["Query UserRole table<br/>email -> role + managerId"]
+        SET["Set context:<br/>user_email, user_role, manager_id"]
+    end
 
-Requests can also be CANCELLED. Only OPEN through ACTIVE count as "active" in dashboard totals.
+    subgraph RBAC["Role-Based Access"]
+        ADMIN["ADMIN<br/>All categories, all endpoints"]
+        MANAGER["MANAGER<br/>Own category only"]
+        VIEWER["VIEWER<br/>Read-only"]
+    end
+
+    subgraph Enforce["Enforcement Points"]
+        GW_ROUTES["Gateway: RequireRole() per route group"]
+        GW_DATA["Gateway: managerId from JWT, not query param"]
+        AI_SCOPE["AI Service: validate_response_scope()"]
+        WS_AUTH["WebSocket: JWT in ?token= param"]
+    end
+
+    JWT --> VALIDATE --> LOOKUP --> SET
+    SET --> ADMIN & MANAGER & VIEWER
+    ADMIN & MANAGER & VIEWER --> Enforce
+```
+
+### Data Compliance — 3-Tier Classification
+
+Every field has a classification tier enforced by `filter_for_llm()` before data reaches OpenAI.
+
+| Tier | Rule | Fields |
+|------|------|--------|
+| **TIER1_NEVER_LLM** | Stripped entirely | `billRateHourly`, `budgetAllocated`, `budgetSpent`, `vendor`, `notes`, `MarketRate.*Rate` |
+| **TIER2_ANONYMIZE** | Replaced with ranges | `headcountNeeded` (5 → "1-10"), `headcountFilled` |
+| **TIER3_SAFE** | Passed unchanged | `requisitionId`, `roleTitle`, `category`, `status`, `priority`, `location` |
+
+```mermaid
+flowchart LR
+    subgraph User["User Query"]
+        Q["What are the open<br/>engineering positions?"]
+    end
+
+    subgraph Guards["AI Service Guardrails"]
+        PII["PII Scanner<br/>Regex: SSN, CC,<br/>email, phone, AWS keys"]
+        PI["Prompt Injection<br/>Detector<br/>11 attack patterns"]
+        DC["Data Classifier<br/>filter_for_llm()"]
+        OS["Output Sanitizer<br/>Strip HTML/JS, scope check"]
+    end
+
+    subgraph LLM["OpenAI"]
+        GPT[gpt-4.1]
+    end
+
+    Q --> PII -->|"Clean"| PI -->|"Safe"| DC -->|"Tier 1 stripped<br/>Tier 2 anonymized"| GPT
+    GPT --> OS -->|"Sanitized response"| User
+```
+
+### Audit Trail
+
+Every API call is logged to the `AuditLog` table: user email + role, action type (DATA_READ, DATA_WRITE, AI_QUERY, FILE_UPLOAD, AUTH_FAILURE, RBAC_DENIED), resource, HTTP method, path, duration, and correlation ID. Uses buffered batch INSERTs (50 entries or 5s) to avoid slowing responses.
+
+### Security Controls
+
+| Control | Implementation |
+|---------|---------------|
+| **CORS** | Restricted to `meta.callsphere.tech` + `localhost:3000` |
+| **Auth** | NextAuth JWT (HS256) validated on every endpoint |
+| **RBAC** | Server-side `UserRole` table + `RequireRole()` middleware |
+| **Rate Limiting** | Per-user: 30/min AI chat, 5/min uploads, 100/min default |
+| **PII Scanning** | Regex strips SSN, CC, phone, email, AWS keys before LLM |
+| **Prompt Injection** | 11 attack patterns blocked |
+| **Credentials** | AWS Secrets Manager + fail-fast on missing env vars |
+| **WebSocket Auth** | JWT in `?token=` param, server-derived managerId |
+
+---
+
+## Database
+
+9 tables managed via Prisma. Key tables:
+
+| Table | Purpose |
+|-------|---------|
+| **SourcingManager** | 5 managers, each assigned one category |
+| **Requisition** | Hiring requests with status, priority, budget, rates |
+| **RequisitionChange** | Every field change with old/new values + AI summary |
+| **Notification** | Per-manager alerts with read/unread state |
+| **NotificationRule** | Per-manager notification preferences |
+| **MarketRate** | Contractor rate benchmarks |
+| **ChatSession** | AI chat conversation history |
+| **AnomalyFingerprint** | 24h dedup for anomaly notifications |
+| **ScrapeLog** | Web scraping history |
+
+Additional tables: `AuditLog` (API call logging), `DataClassification` (field-level tiers), `UserRole` (email → role + managerId).
+
+### Enums
+
+- **RequisitionCategory**: ENGINEERING_CONTRACTORS, CONTENT_TRUST_SAFETY, DATA_OPERATIONS, MARKETING_CREATIVE, CORPORATE_SERVICES
+- **RequisitionStatus**: OPEN → SOURCING → INTERVIEWING → OFFER → ONBOARDING → ACTIVE → COMPLETED / CANCELLED
+- **Priority**: CRITICAL, HIGH, MEDIUM, LOW
+- **ChangeType**: CREATED, UPDATED, STATUS_CHANGE, RATE_CHANGE, HEADCOUNT_CHANGE, BUDGET_CHANGE, BULK_IMPORT
+- **NotificationType**: CHANGE_SUMMARY, ANOMALY_ALERT, BUDGET_WARNING, MILESTONE
+
+Only OPEN through ACTIVE count as "active" in dashboard totals.
 
 ### API Endpoints
 
@@ -273,67 +363,6 @@ Requests can also be CANCELLED. Only OPEN through ACTIVE count as "active" in da
 | **SNS** | POST/GET `/api/sns/setup` |
 | **AI** | POST `/api/ai/chat`, `/api/ai/summarize`, `/api/ai/analyze`, `/api/ai/detect-changes`, `/api/ai/scrape` |
 | **Data Upload** | POST `/api/data-upload`, GET `/api/data-upload/:jobId/status` |
-
----
-
-## Technical Details
-
-### Why Go for the Gateway
-
-Each requisition update triggers 7 operations (read old values, diff, save change, update row, WebSocket broadcast, create notification, SNS publish). In Go, the async operations are `go func()` — zero infrastructure. In Node.js, you'd need BullMQ + Redis for the same thing.
-
-| Metric | Node.js/Express | Go (Gin) |
-|--------|----------------|----------|
-| Requests/sec | 5,000–15,000 | 30,000–100,000+ |
-| Memory per WebSocket connection | 50–100 KB | 2–4 KB |
-| Background async work | Requires job queue + Redis | `go func()` — built in |
-| 1,000 WebSocket connections | 50–100 MB RAM | 2–4 MB RAM |
-
-### WebSocket Hub
-
-- Connections register with a `managerId` (or "admin" for admin users)
-- On broadcast: sends to the target manager's connections + all admin connections
-- Auto-reconnect with exponential backoff on the client side
-- Connection cleanup on disconnect
-
-### Field-Level Change Tracking
-
-The `track()` function in `requisitions.go` compares old vs new for each field. No AI — pure string comparison. Each change gets a type: STATUS_CHANGE, RATE_CHANGE, HEADCOUNT_CHANGE, BUDGET_CHANGE, or UPDATED.
-
-### AI Data Upload Pipeline
-
-4 stages for ingesting any file format:
-
-1. **Parse** — Detect format, extract records (structured formats are programmatic; only unstructured text uses AI)
-2. **Clean** — AI normalizes values in parallel batches ("eng" → ENGINEERING_CONTRACTORS, "$75/hr" → 75.0)
-3. **Validate** — Pydantic schema enforcement (required fields, valid enums, correct types)
-4. **Upsert** — Sequential DB insert with audit records and notifications
-
-### Anomaly Deduplication
-
-24-hour fingerprint-based dedup prevents notification spam. Each anomaly is hashed (category + type + key details). Same fingerprint within 24h is suppressed.
-
-### Kubernetes Deployment
-
-Three deployments in namespace `meta-test`. Traefik IngressRoute with TLS via cert-manager. Secrets: `openai-secret`, `aws-secret`.
-
-Resource allocation (small dataset):
-
-| Service | CPU (request/limit) | Memory (request/limit) |
-|---------|-------------------|----------------------|
-| Frontend | 100m / 500m | 512Mi / 1.5Gi |
-| Gateway | 25m / 200m | 128Mi / 256Mi |
-| AI Service | 50m / 300m | 256Mi / 512Mi |
-
-### Scaling
-
-| What | How |
-|------|-----|
-| Add a manager | INSERT one DB row + subscribe their email to SNS |
-| Add a category | Add enum value — routing is automatic |
-| More requests | PostgreSQL with pagination + indexing handles millions |
-| More traffic | `kubectl scale --replicas` — all services are stateless |
-| More notification channels | One `go func()` in the gateway — SNS already supports SMS, Lambda, SQS, HTTP |
 
 ---
 
@@ -436,245 +465,72 @@ meta_test/
 │   ├── services.yaml               ClusterIP services for internal routing
 │   ├── ingress.yaml                Traefik HTTPS routing with TLS (Let's Encrypt)
 │   ├── secrets.yaml                API keys and credentials (dev fallback)
+│   ├── create-secrets.sh           Script to create K8s secrets from env vars
 │   └── external-secret.yaml        AWS Secrets Manager sync via ESO (production)
 │
+├── .github/
+│   └── workflows/
+│       └── ci.yml                  CI/CD pipeline (Go tests, Python tests, frontend build, K8s validation)
+│
 ├── docs/                           Documentation and interview prep materials
-└── README.md                       This file — project overview and architecture
+└── README.md                       This file
 ```
 
 ---
 
-## AWS Infrastructure — Reliability, Compliance & Guardrails
+## CI/CD
 
-The platform uses AWS services for reliable async processing, monitoring, data compliance, and security. No Airflow — the complexity doesn't justify it at current scale. SQS + CloudWatch + gateway-native scheduling provides the same reliability with fewer moving parts.
+GitHub Actions pipeline runs on every push and PR to `main`:
 
-### Architecture — AWS Services Integration
+| Job | What It Does |
+|-----|-------------|
+| **Gateway Tests** | `go test -race ./...` + binary build (Go 1.24) |
+| **AI Service Tests** | `pytest tests/` (Python 3.12) |
+| **Frontend Build** | `npm run lint` + `npm run build` (Node 20) |
+| **Docker Build Check** | Validates all K8s YAML manifests (runs after all tests pass, main branch only) |
 
-```mermaid
-flowchart TB
-    subgraph Browser["Browser"]
-        FE[Next.js Frontend]
-    end
+---
 
-    subgraph K8s["k3s Cluster"]
-        subgraph GW["Go Gateway"]
-            API[REST API + Auth Middleware]
-            WS[WebSocket Hub]
-            SQS_PROD[SQS Producers]
-            SQS_CONS[SQS Consumers]
-            SCHED[Scheduled Tasks]
-            AUDIT[Audit Logger]
-        end
+## Deployment
 
-        subgraph AI["Python AI Service"]
-            GUARD[Guardrails Layer]
-            LLM_PROXY[OpenAI Agent SDK]
-            TOOLS[DB Query Tools]
-        end
-    end
+Three deployments on k3s in namespace `meta-test`. Traefik IngressRoute with TLS via cert-manager (Let's Encrypt). Secrets synced from AWS Secrets Manager via External Secrets Operator.
 
-    subgraph AWS["AWS Services"]
-        SQS_Q["SQS Queues<br/>3 main + 3 DLQ"]
-        SNS[SNS Topic]
-        CW[CloudWatch<br/>Metrics + Alarms]
-        SM[Secrets Manager]
-    end
+| Service | CPU (req/limit) | Memory (req/limit) |
+|---------|----------------|-------------------|
+| Frontend | 100m / 500m | 512Mi / 1.5Gi |
+| Gateway | 25m / 200m | 128Mi / 256Mi |
+| AI Service | 50m / 300m | 256Mi / 512Mi |
 
-    subgraph DB["Database"]
-        PG[(PostgreSQL<br/>+ AuditLog<br/>+ DataClassification<br/>+ UserRole)]
-    end
+### Scaling
 
-    subgraph OpenAI["External"]
-        GPT[OpenAI API]
-    end
+| What | How |
+|------|-----|
+| Add a manager | INSERT one DB row + subscribe email to SNS |
+| Add a category | Add enum value — routing is automatic |
+| More requests | PostgreSQL pagination + indexing handles millions |
+| More traffic | `kubectl scale --replicas` — all services are stateless |
+| More channels | One `go func()` — SNS supports SMS, Lambda, SQS, HTTP |
 
-    FE -->|"JWT Auth"| API
-    FE -->|"JWT Auth"| WS
-    API --> SQS_PROD
-    SQS_PROD --> SQS_Q
-    SQS_Q --> SQS_CONS
-    SQS_CONS --> SNS
-    SQS_CONS --> AI
-    SCHED --> AI
-    API -->|"X-User-Email<br/>X-User-Role"| AI
-    GUARD --> TOOLS
-    TOOLS -->|"filter_for_llm()"| LLM_PROXY
-    LLM_PROXY --> GPT
-    SQS_Q -->|"DLQ depth > 0"| CW
-    CW -->|"Alarm"| SNS
-    SM -->|"K8s ExternalSecret"| K8s
-    API --> AUDIT
-    AUDIT --> PG
-    TOOLS --> PG
-    API --> PG
-```
+---
 
-### SQS Queues — Replacing Fire-and-Forget Goroutines
+## Why Go for the Gateway
 
-Every async operation now flows through SQS with automatic retry (3x) and dead-letter queues.
+Each update triggers 7 operations (read, diff, save change, update, WebSocket, notification, SNS). In Go, async work is `go func()` — no job queue needed.
 
-| Queue | Type | What It Processes | DLQ |
-|-------|------|-------------------|-----|
-| `metasource-analysis.fifo` | FIFO | AI anomaly detection per category (serialized by MessageGroupId) | `metasource-analysis-dlq.fifo` |
-| `metasource-email` | Standard | Email notifications to managers via AI service | `metasource-email-dlq` |
-| `metasource-sns-publish` | Standard | SNS change event publishing | `metasource-sns-publish-dlq` |
+| Metric | Node.js/Express | Go (Gin) |
+|--------|----------------|----------|
+| Requests/sec | 5,000–15,000 | 30,000–100,000+ |
+| Memory per WebSocket | 50–100 KB | 2–4 KB |
+| Background async | Requires job queue + Redis | `go func()` built in |
+| 1,000 WebSocket connections | 50–100 MB | 2–4 MB |
 
-```mermaid
-flowchart LR
-    subgraph Trigger["Requisition Change"]
-        CREATE[Create/Update/Delete]
-    end
+---
 
-    subgraph Producers["Gateway Producers (sync, <50ms)"]
-        EA[EnqueueAnalysis]
-        EE[EnqueueEmail]
-        ES[EnqueueSNSPublish]
-    end
+## CloudWatch Monitoring
 
-    subgraph Queues["SQS Queues"]
-        Q1["analysis.fifo<br/>Visibility: 120s"]
-        Q2["email<br/>Visibility: 30s"]
-        Q3["sns-publish<br/>Visibility: 30s"]
-        DLQ1["analysis-dlq.fifo"]
-        DLQ2["email-dlq"]
-        DLQ3["sns-publish-dlq"]
-    end
-
-    subgraph Consumers["Gateway Consumers (long-polling)"]
-        C1["processAnalysis<br/>Concurrency: 1"]
-        C2["processEmail<br/>Concurrency: 3"]
-        C3["processSNSPublish<br/>Concurrency: 2"]
-    end
-
-    CREATE --> EA & EE & ES
-    EA --> Q1
-    EE --> Q2
-    ES --> Q3
-    Q1 --> C1
-    Q2 --> C2
-    Q3 --> C3
-    Q1 -->|"3 failures"| DLQ1
-    Q2 -->|"3 failures"| DLQ2
-    Q3 -->|"3 failures"| DLQ3
-```
-
-### Scheduled Tasks — Replacing Python Crons
-
-Timer-based goroutines in the gateway replace the Python `asyncio.sleep` loops. Same reliability, proper error handling, CloudWatch metrics on every execution.
-
-| Task | Interval | What It Does |
-|------|----------|-------------|
-| Summarization | Every 15 min | Calls AI service to detect unsummarized changes, generate plain English summaries |
-| Anomaly Scan | Every 1 hour | Iterates all 5 categories, runs anomaly detection, deduplicates, creates notifications |
-
-### CloudWatch Monitoring
-
-| Alarm | Triggers When | Action |
-|-------|--------------|--------|
-| `*-dlq-not-empty` (x3) | Any DLQ has >= 1 message for 5 min | SNS email alert |
-| `*-queue-backlog` (x3) | Any main queue > 100 messages for 5 min | SNS email alert |
-| Custom: `TaskFailure` | Scheduled task fails | Logged + metric |
-| Custom: `ProcessingDuration` | Per-message processing time | Dashboard metric |
-
-### Data Compliance — 3-Tier Classification
-
-Every field in the database has a classification tier stored in the `DataClassification` table. The AI service's `filter_for_llm()` function enforces these tiers before any data reaches OpenAI.
-
-| Tier | Rule | Fields |
-|------|------|--------|
-| **TIER1_NEVER_LLM** | Stripped entirely before LLM call | `billRateHourly`, `budgetAllocated`, `budgetSpent`, `vendor`, `notes`, `MarketRate.min/max/medianRate` |
-| **TIER2_ANONYMIZE** | Replaced with ranges/buckets | `headcountNeeded` (5 -> "1-10"), `headcountFilled` |
-| **TIER3_SAFE** | Passed unchanged | `requisitionId`, `roleTitle`, `category`, `status`, `priority`, `location`, `team`, `department` |
-
-```mermaid
-flowchart LR
-    subgraph User["User Query"]
-        Q["What are the open<br/>engineering positions?"]
-    end
-
-    subgraph Guards["AI Service Guardrails"]
-        PII["PII Scanner<br/>Regex: SSN, CC,<br/>email, phone, AWS keys"]
-        PI["Prompt Injection<br/>Detector<br/>11 attack patterns"]
-        DC["Data Classifier<br/>filter_for_llm()"]
-        OS["Output Sanitizer<br/>Strip HTML/JS, scope check"]
-    end
-
-    subgraph LLM["OpenAI"]
-        GPT[gpt-4.1]
-    end
-
-    Q --> PII -->|"Clean"| PI -->|"Safe"| DC -->|"Tier 1 stripped<br/>Tier 2 anonymized"| GPT
-    GPT --> OS -->|"Sanitized response"| User
-```
-
-### RBAC — Server-Side Authorization
-
-```mermaid
-flowchart TB
-    subgraph Request["Incoming Request"]
-        JWT["Authorization: Bearer <NextAuth JWT>"]
-    end
-
-    subgraph Auth["Gateway Auth Middleware"]
-        VALIDATE["Validate JWT<br/>(HS256 + NEXTAUTH_SECRET)"]
-        LOOKUP["Query UserRole table<br/>email -> role + managerId"]
-        SET["Set context:<br/>user_email, user_role, manager_id"]
-    end
-
-    subgraph RBAC["Role-Based Access"]
-        ADMIN["ADMIN<br/>All categories, all endpoints"]
-        MANAGER["MANAGER<br/>Own category only"]
-        VIEWER["VIEWER<br/>Read-only"]
-    end
-
-    subgraph Enforce["Enforcement Points"]
-        GW_ROUTES["Gateway: RequireRole() per route group"]
-        GW_DATA["Gateway: managerId from JWT, not query param"]
-        AI_SCOPE["AI Service: validate_response_scope()"]
-        WS_AUTH["WebSocket: JWT in ?token= param"]
-    end
-
-    JWT --> VALIDATE --> LOOKUP --> SET
-    SET --> ADMIN & MANAGER & VIEWER
-    ADMIN & MANAGER & VIEWER --> Enforce
-```
-
-### Audit Trail
-
-Every API call is logged to the `AuditLog` table with:
-- **Who**: User email + role (from JWT, not hardcoded "admin")
-- **What**: Action type (DATA_READ, DATA_WRITE, AI_QUERY, FILE_UPLOAD, AUTH_FAILURE, RBAC_DENIED)
-- **Where**: Resource + resource ID + HTTP method + path
-- **When**: Timestamp + duration in ms
-- **Correlation**: `X-Request-ID` propagated across all 3 services
-
-The audit middleware uses a buffered Go channel with batch INSERTs (50 entries or 5 seconds) so it never slows down API responses.
-
-### Secrets Management
-
-All credentials are stored in AWS Secrets Manager and synced to K8s via External Secrets Operator:
-
-| Secret | Source | K8s Secret |
-|--------|--------|-----------|
-| Database credentials | `meta-source/prod` | `db-secret` |
-| NextAuth + Google OAuth | `meta-source/prod` | `auth-secret` |
-| SMTP credentials | `meta-source/prod` | `smtp-secret` |
-| OpenAI API key | `openai-secret` (existing) | `openai-secret` |
-| AWS credentials | `aws-secret` (existing) | `aws-secret` |
-
-No hardcoded credentials in code or environment variables. Services fail fast if secrets are missing.
-
-### Security Hardening Summary
-
-| Control | Before | After |
-|---------|--------|-------|
-| **CORS** | `*` (any origin) | `meta.callsphere.tech` + `localhost:3000` only |
-| **Auth** | None on gateway | NextAuth JWT validation on every endpoint |
-| **RBAC** | Frontend email check | Server-side UserRole table + RequireRole() middleware |
-| **Rate Limiting** | 100 req/s global | Per-user: 30/min for AI chat, 5/min for uploads, 100/min default |
-| **PII** | Raw data to OpenAI | Regex scanner strips SSN, CC, phone, email, AWS keys |
-| **Prompt Injection** | None | 11 attack patterns blocked |
-| **Data Classification** | All fields to LLM | 3-tier system: pricing/budgets never reach LLM |
-| **Audit** | `changedBy: "admin"` | Full audit log with user identity, correlation IDs |
-| **Credentials** | Hardcoded `postgres:postgres` | AWS Secrets Manager + fail-fast on missing env vars |
-| **WebSocket** | No auth, user-supplied managerId | JWT auth, server-derived managerId |
+| Alarm | Trigger | Action |
+|-------|---------|--------|
+| `*-dlq-not-empty` (x3) | DLQ has >= 1 message for 5 min | SNS email alert |
+| `*-queue-backlog` (x3) | Queue > 100 messages for 5 min | SNS email alert |
+| `TaskFailure` | Scheduled task fails | Logged + metric |
+| `ProcessingDuration` | Per-message processing time | Dashboard metric |
