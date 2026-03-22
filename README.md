@@ -325,45 +325,34 @@ Every API call is logged to the `AuditLog` table: user email + role, action type
 
 ### Future: Enterprise Compliance Pipeline
 
-Currently we use custom code for compliance — regex PII scanning, a DB table for data classification, and hardcoded role checks in Go. It works, but policy changes need code deploys and regex misses PII like names and addresses.
-
-The future plan replaces this with four open-source tools:
-
-| Tool | Job | Replaces |
-|------|-----|----------|
-| **Apache Ranger** | Access control — who can see what | `RequireRole()` + `checkManagerAuth()` in Go |
-| **OpenMetadata** | Data catalog — tag fields as sensitive | `DataClassification` DB table |
-| **OPA** | Policy engine — evaluate rules without code deploys | Hardcoded role/category checks |
-| **Presidio** | PII masking — ML-based, catches names/addresses | Regex `pii_scanner.py` |
-
-**Example: Manager asks AI "What are the bill rates for engineering?"**
+Currently we use custom code for compliance. The future plan replaces it with four open-source tools:
 
 ```
-Current flow:
-  1. Go middleware checks: is user role MANAGER? is category ENGINEERING? (hardcoded)
-  2. DB query runs, data_classifier strips billRate (TIER1_NEVER_LLM tag from DB table)
-  3. pii_scanner regex checks the response for SSN/CC patterns
-  4. Response sent
-
-Future flow:
-  1. Ranger asks OPA: "Can this manager access engineering bill rates?"
-     OPA checks the Rego policy file (no code deploy to change rules)
-  2. Ranger asks OpenMetadata: "What tags does billRate have?"
-     OpenMetadata says: "PII: TIER1_NEVER_LLM" (tagged via UI, not SQL)
-  3. Presidio scans the response with ML models (catches "John Smith" not just SSN patterns)
-  4. Response sent
+User/AI query → Ranger → OpenMetadata → OPA → Presidio → safe data
 ```
 
-**Trade-offs:**
+| Tool | What it does | Where it runs | How it connects |
+|------|-------------|---------------|-----------------|
+| **Apache Ranger** | Checks if the user is allowed to access the requested data | K8s sidecar in gateway pod | Go middleware calls Ranger REST API before every request hits a handler |
+| **OpenMetadata** | Stores tags on DB columns (e.g., `billRate` = "sensitive") | Separate K8s deployment with its own DB | Ranger calls OpenMetadata API to look up tags for the fields being queried |
+| **OPA** | Evaluates policy rules — "managers can only see their own category" | K8s sidecar in gateway pod | Ranger sends user role + field tags to OPA; OPA returns allow/deny based on Rego policy files stored in a ConfigMap |
+| **Presidio** | Masks PII using ML — catches names, addresses, not just regex patterns | K8s sidecar (2 containers) in AI service pod | Python AI service calls Presidio HTTP API to scan/redact text before returning responses |
 
-| | Current | Enterprise |
-|---|---|---|
-| **Works today** | Yes | Needs 4 new services + ~3x cluster resources |
-| **Policy changes** | Code deploy | Update a config file or UI |
-| **PII detection** | Regex (SSN, CC, phone) | ML (+ names, addresses, medical) |
-| **Ops overhead** | Minimal | Each tool needs monitoring |
+**Example: Manager asks "Show bill rates for engineering contractors"**
 
-Worth it when compliance requirements demand standard tooling, or PII accuracy is critical.
+```
+1. Request hits Go gateway
+2. Gateway middleware calls Ranger (sidecar, localhost:6080)
+3. Ranger calls OpenMetadata (separate pod) → learns billRate is tagged "sensitive"
+4. Ranger calls OPA (sidecar, localhost:8181) → OPA checks Rego policy →
+   "managers can see their own category but sensitive fields are masked"
+5. Request passes to AI service
+6. AI service queries DB, then calls Presidio (sidecar, localhost:5001) →
+   Presidio ML-scans the response, redacts "John Smith" → "[REDACTED]"
+7. Safe response returned
+```
+
+**Trade-offs:** Adds 4 services (~3x cluster resources) and ops overhead, but policy changes no longer need code deploys and ML catches PII that regex misses. Worth it when compliance requirements demand standard tooling.
 
 ---
 
