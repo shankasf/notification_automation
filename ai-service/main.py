@@ -653,8 +653,11 @@ scheduler_logger = get_logger("scheduler")
 
 async def scheduled_summarize():
     """Periodically find unsummarized RequisitionChange rows, generate AI summaries
-    grouped by category, stamp the summary back onto each change row, create an
-    in-app Notification for the category manager, and send an email.
+    grouped by category, stamp the summary back onto each change row, and send a
+    digest email to the category manager.
+
+    In-app notifications are NOT created here — the gateway already creates one
+    immediately when the change occurs (see requisitions.go UpdateRequisition).
 
     Runs every 15 minutes in the background.
     """
@@ -705,11 +708,6 @@ async def scheduled_summarize():
                             if row:
                                 manager_id = row[0]
                                 should_email = True
-                                cur.execute(
-                                    '''INSERT INTO "Notification" (id, "managerId", type, title, message, "isRead", "createdAt")
-                                       VALUES (gen_random_uuid(), %s, 'CHANGE_SUMMARY', 'Automated Change Summary', %s, false, NOW())''',
-                                    (manager_id, summary),
-                                )
                             conn.commit()
                             scheduler_logger.info(
                                 "db_updated",
@@ -717,7 +715,7 @@ async def scheduled_summarize():
                                     "extra_data": {
                                         "category": category,
                                         "changes_updated": len(change_ids),
-                                        "notification_created": should_email,
+                                        "email_queued": should_email,
                                     }
                                 },
                             )

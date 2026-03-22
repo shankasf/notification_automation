@@ -72,10 +72,14 @@ func GetStats(c *gin.Context) {
 		}
 	}
 
-	// By status — includes ALL statuses for distribution chart
+	// By status — includes ALL statuses for distribution chart.
+	// Initialize every status to 0 so the chart always shows all bars.
+	byStatus := gin.H{
+		"OPEN": 0, "SOURCING": 0, "INTERVIEWING": 0, "OFFER": 0,
+		"ONBOARDING": 0, "ACTIVE": 0, "COMPLETED": 0, "CANCELLED": 0,
+	}
 	statusRows, _ := db.DB.Query(`
 		SELECT status, COUNT(*) FROM "Requisition" `+allWhereClause+` GROUP BY status`, allArgs...)
-	byStatus := gin.H{}
 	if statusRows != nil {
 		defer statusRows.Close()
 		for statusRows.Next() {
