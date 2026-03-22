@@ -323,82 +323,47 @@ Every API call is logged to the `AuditLog` table: user email + role, action type
 | **Credentials** | AWS Secrets Manager + fail-fast on missing env vars |
 | **WebSocket Auth** | JWT in `?token=` param, server-derived managerId |
 
-### Current vs. Future: Enterprise Compliance Pipeline
+### Future: Enterprise Compliance Pipeline
 
-The platform currently uses **homegrown guardrails** — regex PII scanning, a DB-driven data classifier, hardcoded RBAC middleware, and rule-based output sanitization. These work but have limitations: regex misses context-dependent PII, classification rules are manual, and policy changes require code deploys.
+Currently we use custom code for compliance — regex PII scanning, a DB table for data classification, and hardcoded role checks in Go. It works, but policy changes need code deploys and regex misses PII like names and addresses.
 
-The target architecture replaces these with four enterprise tools wired into a single pipeline:
+The future plan replaces this with four open-source tools:
+
+| Tool | Job | Replaces |
+|------|-----|----------|
+| **Apache Ranger** | Access control — who can see what | `RequireRole()` + `checkManagerAuth()` in Go |
+| **OpenMetadata** | Data catalog — tag fields as sensitive | `DataClassification` DB table |
+| **OPA** | Policy engine — evaluate rules without code deploys | Hardcoded role/category checks |
+| **Presidio** | PII masking — ML-based, catches names/addresses | Regex `pii_scanner.py` |
+
+**Example: Manager asks AI "What are the bill rates for engineering?"**
 
 ```
-User/AI query
-  → Apache Ranger    (access control gateway — "can this user access this resource?")
-  → OpenMetadata     (data catalog — "what sensitivity tags does this field have?")
-  → OPA              (policy engine — "given these tags and this role, what's allowed?")
-  → Presidio         (PII masking — "redact any personal data before returning")
-  → Safe response
+Current flow:
+  1. Go middleware checks: is user role MANAGER? is category ENGINEERING? (hardcoded)
+  2. DB query runs, data_classifier strips billRate (TIER1_NEVER_LLM tag from DB table)
+  3. pii_scanner regex checks the response for SSN/CC patterns
+  4. Response sent
+
+Future flow:
+  1. Ranger asks OPA: "Can this manager access engineering bill rates?"
+     OPA checks the Rego policy file (no code deploy to change rules)
+  2. Ranger asks OpenMetadata: "What tags does billRate have?"
+     OpenMetadata says: "PII: TIER1_NEVER_LLM" (tagged via UI, not SQL)
+  3. Presidio scans the response with ML models (catches "John Smith" not just SSN patterns)
+  4. Response sent
 ```
 
-#### Tool Mapping
+**Trade-offs:**
 
-| Current (Homegrown) | Future (Enterprise) | What Changes |
-|---------------------|---------------------|-------------|
-| `guardrails/pii_scanner.py` — regex patterns for SSN, CC, email, phone, AWS keys | **Microsoft Presidio** — ML-based NER with spaCy models. Catches context-dependent PII that regex misses (names, addresses, medical terms) | Presidio runs as 2 sidecars (analyzer + anonymizer) in the AI pod. Same `redact_text()` interface, falls back to regex if Presidio is down |
-| `guardrails/data_classifier.py` + `DataClassification` table — manual tier assignments per field | **OpenMetadata** — data catalog with column-level tags. Classification lives in the catalog, not a flat DB table | Tags managed via OpenMetadata UI instead of raw SQL. `filter_for_llm()` reads tags via REST API with 5-min cache |
-| `middleware/auth.go` + `RequireRole()` + `checkManagerAuth()` — hardcoded Go role checks | **OPA (Open Policy Agent)** — policy-as-code in Rego. Role/route/category rules are declarative, not compiled into the binary | OPA runs as a sidecar in the gateway pod. Policy changes = update a ConfigMap, no redeploy |
-| Go middleware as the authorization layer | **Apache Ranger** — centralized access control that reads OpenMetadata tags and delegates to OPA for policy evaluation | Ranger becomes the single authz decision point. Gateway still validates JWT but delegates all authorization to Ranger |
-
-#### Architecture Comparison
-
-**Current:**
-```
-Request → JWT auth (Go) → hardcoded RequireRole (Go) → handler queries DB
-                                                          → data_classifier strips/anonymizes fields
-                                                          → pii_scanner regex-redacts input
-                                                          → output_sanitizer checks scope
-```
-
-**Future:**
-```
-Request → JWT auth (Go, kept)
-        → Ranger middleware (Go → Ranger REST API)
-            → Ranger reads OpenMetadata tags for the resource
-            → Ranger evaluates OPA policies (role + tags + category)
-            → Returns allow/deny + field-level conditions
-        → Handler queries DB
-            → OpenMetadata client filters by tag tiers (replaces data_classifier)
-            → Presidio ML-redacts PII (replaces regex scanner)
-            → prompt_guard.py injection check (kept, no enterprise replacement)
-            → output_sanitizer XSS/SQL strip (kept, no enterprise replacement)
-```
-
-#### Phased Rollout
-
-| Phase | Tool | Deploys As | Effort | Risk |
-|-------|------|-----------|--------|------|
-| 1 | **OPA** | Sidecar in gateway pod | Medium | Low — stateless, easy rollback |
-| 2 | **Presidio** | 2 sidecars in AI pod | Low-Medium | Low — drop-in with fallback |
-| 3 | **OpenMetadata** | Separate deployment + Elasticsearch | High | Medium — new stateful infra |
-| 4 | **Apache Ranger** | Separate deployment | High | High — replaces core authz |
-
-Phases 1+2 can run in parallel. Phase 3 must precede Phase 4 (Ranger needs OpenMetadata tags).
-
-#### Trade-offs
-
-| | Homegrown (Current) | Enterprise Tools (Future) |
+| | Current | Enterprise |
 |---|---|---|
-| **Setup complexity** | Zero — already running | High — 4 new services, ~3x cluster resources |
-| **PII accuracy** | Regex only — misses names, addresses, context-dependent data | ML-based NER — catches entity types regex can't |
-| **Policy changes** | Requires code change + redeploy | Update Rego file or Ranger UI — no redeploy |
-| **Data classification** | Manual SQL inserts in `DataClassification` table | Visual UI in OpenMetadata, version-controlled tags |
-| **Operational overhead** | Minimal — just Go + Python | Significant — OPA, Presidio, OpenMetadata (+ ES), Ranger each need monitoring |
-| **Resource footprint** | ~2 GB total across 3 pods | ~6 GB total — OpenMetadata + Ranger are Java/memory-heavy |
-| **Compliance audit** | Homegrown audit log, no standard format | Ranger provides built-in audit with standard formats |
-| **Vendor lock-in** | None — all custom code | Low — all open-source (Apache/Microsoft), but migration effort is real |
-| **Team expertise** | Go + Python (already have) | Adds Rego (OPA), Java config (Ranger), OpenMetadata admin |
-| **Failure modes** | Code bugs → fix and deploy | Service outages → need fallback paths for each tool |
-| **Time to production** | Already there | 4-6 weeks for a team of 2 |
+| **Works today** | Yes | Needs 4 new services + ~3x cluster resources |
+| **Policy changes** | Code deploy | Update a config file or UI |
+| **PII detection** | Regex (SSN, CC, phone) | ML (+ names, addresses, medical) |
+| **Ops overhead** | Minimal | Each tool needs monitoring |
 
-**Bottom line:** The homegrown approach is fine for the current scale. The enterprise stack is worth it when: (a) compliance/audit requirements demand industry-standard tooling, (b) policy changes need to happen without code deploys, or (c) PII detection accuracy is critical (healthcare, finance, legal data).
+Worth it when compliance requirements demand standard tooling, or PII accuracy is critical.
 
 ---
 
