@@ -394,6 +394,42 @@ Scheduler (every 1-5 min) → GET /api/v1/requisitions?modified_since={watermark
     → Compare sourceHash with DB → Only process changed records → Same pipeline
 ```
 
+### Streaming flow (large-scale)
+
+For millions of records or multiple SaaS sources feeding data simultaneously.
+
+```
+SaaS A (Workday) ──┐
+SaaS B (SAP)     ──┤──→ Kafka / Amazon Kinesis
+SaaS C (Salesforce)┘         │
+                             ├── Topic: "workday-requisitions"  (partition by category)
+                             ├── Topic: "sap-requisitions"      (partition by category)
+                             └── Topic: "salesforce-requisitions"
+                                         │
+                                    Retain 7 days (full replay on failure)
+                                         │
+                          ┌──────────────┼──────────────┐
+                          ▼              ▼              ▼
+                   Consumer Group   Consumer Group   Consumer Group
+                   (ENG partition)  (DATA partition) (MKT partition)
+                          │              │              │
+                          └──────────────┼──────────────┘
+                                         ▼
+                              Clean → Validate → Upsert
+                                (same pipeline, ON CONFLICT dedup)
+```
+
+**Why Kafka/Kinesis over SQS at this scale:**
+
+| Concern | SQS | Kafka/Kinesis |
+|---------|-----|---------------|
+| **Replay** | Message deleted after processing | Retained 7 days — reprocess on bug fix |
+| **Ordering** | FIFO limited to 300 msg/sec | Partition-level ordering, unlimited throughput |
+| **Fan-out** | One consumer per queue | Multiple consumer groups read same stream independently |
+| **Backpressure** | Visibility timeout juggling | Consumer reads at its own pace, offset-based |
+
+**Partition strategy:** Each topic partitioned by category (5 partitions). This guarantees ordering within a category (all Engineering changes processed sequentially) while allowing parallel processing across categories.
+
 All three patterns converge into the existing clean → validate → upsert pipeline. Dedup uses `externalId` (SaaS system's ID) and `sourceHash` (MD5 of field values) to prevent duplicates and skip no-op updates.
 
 ### Future: Enterprise Compliance Pipeline
