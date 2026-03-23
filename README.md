@@ -347,6 +347,55 @@ Every API call is logged to the `AuditLog` table: user email + role, action type
 | **Credentials** | AWS Secrets Manager + fail-fast on missing env vars |
 | **WebSocket Auth** | JWT in `?token=` param, server-derived managerId |
 
+### SOC 2 Compliance Mapping
+
+| SOC 2 Principle | Requirement | Implementation |
+|----------------|-------------|----------------|
+| **Security** | Access control | RBAC (ADMIN/MANAGER/VIEWER), JWT auth, rate limiting, CORS |
+| **Availability** | System uptime | SQS retry + DLQ (3x before dead-letter), CloudWatch alarms, health checks |
+| **Processing Integrity** | Data accuracy | Pydantic validation, field-level change tracking, per-record commits, `sourceHash` dedup |
+| **Confidentiality** | Sensitive data protection | 3-tier classification (`filter_for_llm`), PII scanner, TIER1 fields never reach OpenAI, AWS Secrets Manager |
+| **Privacy** | Data isolation | `enforced_category` scoping, prompt guard blocks cross-category queries, output sanitizer |
+
+The `AuditLog` table covers the core SOC 2 audit requirement — every API call logged with who (email + role), what (action type), when (timestamp), and where (path + resource + correlation ID).
+
+---
+
+## Third-Party SaaS Ingestion
+
+The upload pipeline currently handles manual file uploads. For real-time ingestion from external SaaS tools (Workday, Salesforce, SAP), three patterns apply:
+
+| Pattern | When to use | Latency | Auth |
+|---------|------------|---------|------|
+| **Webhooks** | SaaS supports push events (Workday, Salesforce) | 2-5 seconds | SaaS signs payload with HMAC, we verify |
+| **Polling** | No webhook support (Google Sheets, legacy systems) | 1-5 minutes | We call their API with OAuth/API key |
+| **Streaming** | Large-scale, multi-source (data warehouses) | Sub-second | Kafka/Kinesis with IAM |
+
+### Webhook flow
+
+```
+SaaS (e.g., Workday) ──POST──→ /api/webhooks/workday
+    │                          │── Verify HMAC signature
+    │                          │── Enqueue raw payload to SQS ingest queue
+    │                          │── Return 200 immediately
+    │                          ▼
+                         SQS ingest queue → Consumer → Clean → Validate → Upsert
+                                                                  │
+                                                           ON CONFLICT UPDATE
+                                                        (externalId + sourceHash dedup)
+```
+
+### Polling flow (fallback)
+
+Used for initial backfill (webhooks don't send history), missed event recovery after downtime, and systems without webhook support.
+
+```
+Scheduler (every 1-5 min) → GET /api/v1/requisitions?modified_since={watermark}
+    → Compare sourceHash with DB → Only process changed records → Same pipeline
+```
+
+All three patterns converge into the existing clean → validate → upsert pipeline. Dedup uses `externalId` (SaaS system's ID) and `sourceHash` (MD5 of field values) to prevent duplicates and skip no-op updates.
+
 ### Future: Enterprise Compliance Pipeline
 
 Currently we use custom code for compliance. The future plan replaces it with four open-source tools:
