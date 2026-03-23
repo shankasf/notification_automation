@@ -88,6 +88,30 @@ The WebSocket hub routes by role: manager connections get their own category eve
 | **Chat Assistant** | Answers questions using 6 database query tools | On demand |
 | **Data Upload** | Ingests CSV/Excel/JSON — AI cleans and normalizes | Admin-triggered |
 
+### Data Ingestion Pipeline
+
+Admins upload CSV/Excel/JSON files which flow through a 4-stage pipeline:
+
+```
+Upload file (e.g. contractors.csv)
+    → Parse: detect format, extract raw records
+    → Clean: AI normalizes messy data in parallel batches
+    → Validate: Pydantic models enforce required fields, types, enums
+    → Upsert: insert new / update existing requisitions in PostgreSQL
+```
+
+**Example:** Admin uploads a CSV where one row has `role_title: "sr devops eng"`, `status: "open"`, `bill_rate: "$95/hr"`. The clean stage normalizes it to `roleTitle: "Senior DevOps Engineer"`, `status: "OPEN"`, `billRateHourly: 95`. Validation confirms all fields match the schema, then upsert writes it to the database.
+
+### Data Guardrails
+
+Every AI query passes through 4 guardrails before and after reaching the LLM:
+
+```
+User query → PII Scanner → Prompt Injection Detector → Data Classifier → LLM → Output Sanitizer → User
+```
+
+**Example:** A manager asks "Show me John Smith's bill rate for engineering." The PII scanner flags `John Smith` as a name but allows it in the query context. The data classifier strips `billRateHourly` (TIER1_NEVER_LLM) from the DB results before they reach the LLM. The output sanitizer then verifies the response doesn't leak any tier-1 fields or contain HTML/script tags. The manager gets a response about engineering positions without any financial data exposed.
+
 ### Active Request Counting
 
 Dashboard totals only count active statuses (OPEN through ACTIVE). COMPLETED and CANCELLED are excluded from headline numbers but appear in the status distribution chart.
